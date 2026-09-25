@@ -7,7 +7,7 @@ import json
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
-DEST = ROOT / 'handover' / 'Mums Reading Project'
+DEST = ROOT / 'handover' / 'Marking Project'
 EXCLUDE_ROOT = {'handover', 'test-workspace-temp', 'tmp', '.acceptance', 'complete.zip', 'full_source_dump.txt', 'prepare_mac_handover.py', 'NotoSansSC-OFL.txt'}
 EXCLUDE_DIR = {'__pycache__', '.venv', '.git', '.codex', '.agents', '.pytest_cache', 'test-temp'}
 skipped = []

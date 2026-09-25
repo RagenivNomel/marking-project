@@ -118,7 +118,7 @@ def ocr_name(img, box, tessdata_dir=None):
     # Set TESSDATA_PREFIX only for the duration of this call, then restore
     # whatever was there before. This avoids the config-string approach,
     # which breaks when tessdata_dir contains spaces (common on Windows,
-    # e.g. "C:\Users\...\Mums reading project\tessdata") because pytesseract
+    # e.g. "C:\Users\...\marking project\tessdata") because pytesseract
     # splits the config string on whitespace without shell-style quoting.
     previous = os.environ.get("TESSDATA_PREFIX")
     try:

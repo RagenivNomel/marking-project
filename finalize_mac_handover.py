@@ -4,7 +4,7 @@ import json
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
-DEST = ROOT / 'handover' / 'Mums Reading Project'
+DEST = ROOT / 'handover' / 'Marking Project'
 skip = {'__pycache__', 'test-workspace-temp', 'test-temp', '.venv', '.pytest_cache'}
 files = [p for p in DEST.rglob('*') if p.is_file() and not any(part in skip for part in p.relative_to(DEST).parts) and p.name != 'FILE_MANIFEST.json']
 changed = {'rendering/renderer.py', 'grading/codex_sol_grader.py', 'rendering/template/layout_v1.json', 'rendering/template/layout_v1_1.json', 'rendering/template/layout_v1_2.json'}
@@ -20,7 +20,7 @@ for p in files:
     manifest[rel] = {'bytes': p.stat().st_size, 'sha256': digest}
 mf = DEST / 'FILE_MANIFEST.json'
 mf.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
-archive = ROOT / 'handover' / 'Mums-Reading-Project-Mac.zip'
+archive = ROOT / 'handover' / 'Marking-Project-Mac.zip'
 with zipfile.ZipFile(archive, 'x', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
     for p in files + [mf]:
         info = zipfile.ZipInfo.from_file(p, (Path(DEST.name) / p.relative_to(DEST)).as_posix())
@@ -33,5 +33,5 @@ with zipfile.ZipFile(archive, 'x', zipfile.ZIP_DEFLATED, compresslevel=6) as z:
 with zipfile.ZipFile(archive) as z:
     assert z.testzip() is None
 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-(archive.parent / 'Mums-Reading-Project-Mac.zip.sha256').write_text(f'{digest}  {archive.name}\n', encoding='ascii')
+(archive.parent / 'Marking-Project-Mac.zip.sha256').write_text(f'{digest}  {archive.name}\n', encoding='ascii')
 print(json.dumps({'archive': str(archive), 'files': len(files)+1, 'unchanged_source_files_verified': matched, 'size_MB': round(archive.stat().st_size/1e6, 1), 'sha256': digest}))

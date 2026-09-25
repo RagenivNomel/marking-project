@@ -1,4 +1,4 @@
-# Higher Chinese Composition Marking
+# Marking Project
 
 Desktop workflow for Secondary 2 Higher Chinese composition marking.
 

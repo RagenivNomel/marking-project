@@ -183,7 +183,7 @@ class CodexSolGrader:
         """Run one ephemeral process. This method has no retry path."""
         parent = self.workspace_parent or Path(tempfile.gettempdir())
         parent.mkdir(parents=True, exist_ok=True)
-        workspace = (parent / f"mums-codex-sol-{uuid.uuid4().hex}").resolve()
+        workspace = (parent / f"marking-codex-sol-{uuid.uuid4().hex}").resolve()
         workspace.mkdir()
         try:
             schema_path = workspace / "schema.json"
