@@ -1,0 +1,126 @@
+# Python bytecode, caches, and test output
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Python environments and installed dependencies
+.venv/
+venv/
+env/
+ENV/
+.desktop-deps/
+
+# Local Codex, IDE, and machine state
+.codex/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk
+
+# Local caches, temporary workspaces, and test-generated material
+.cache/
+cache/
+tmp/
+temp/
+test-workspace-temp/
+.acceptance/
+.stage3a-test-temp/
+.sprite-studio/
+worktrees/
+manual-test-managed-output/
+
+# Operational marking state and generated outputs
+/jobs/
+/output/
+/outputs/
+/exports/
+/backups/
+/handover/
+
+# Student compositions, identity decisions, and local review datasets
+/pile1_test/
+/pile2_test/
+/pile3_test/
+/pile4_test/
+/raw front and back/
+/final student list/
+/_HELD_FOR_SEPARATE_GRADING/
+/config/*_identity_decisions.json
+
+# Design-stage captures contain local QA evidence and generated artifacts.
+/design/stage-2a/
+/design/stage-2b/
+/design/stage-2b1/
+/design/stage-3a/
+/design/stage-3b/
+/design references/
+/design/sprite-maker-tooling/
+/design/mascot/phase-a/animations/
+/design/mascot/phase-a/exports/
+/design/mascot/phase-a/worktrees/
+/design/mascot/phase-b/previews/
+/design/mascot/phase-b/marking-panel-preview.png
+/design/mascot/phase-b/working-panel-native.png
+/design/mascot/phase-b/working-panel-preview.png
+
+# Unreviewed local/generated art, not referenced by the application
+/assets/characters/
+/Open Sprite Studio with Codex.cmd
+/open-sprite-studio-admin.cmd
+
+# The original operational README is preserved locally, outside the repository.
+/README.private.local.txt
+
+# Operational document/data formats. Re-include only a specifically reviewed fixture/template.
+*.pdf
+*.xlsx
+*.xls
+*.csv
+*.zip
+
+# Root-level reports and dumps; retain reviewed dependency/license text files.
+/*.txt
+!/requirements.txt
+!/requirements-desktop.txt
+!/requirements-scanning.txt
+!/NotoSansSC-OFL.txt
+
+# Student work products and recovery/audit records wherever they appear
+**/results.xlsx
+**/render_receipt.json
+**/student_record.json
+**/real_grading_bridge.json
+**/real_grading_attempts.json
+**/raw_model_response.json
+**/parsed_result.json
+**/validation_report.json
+**/student_card.png
+**/*-作文体检卡.png
+
+# Secrets and credential material
+.env
+.env.*
+!.env.example
+credentials*
+secrets*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Logs, temporary files, lock markers, and build products
+*.log
+*.tmp
+*.bak
+*.pid
+*.pipeline.lock
+.real-batch.lock
+.calibration.lock
+build/
+dist/
+*.egg-info/

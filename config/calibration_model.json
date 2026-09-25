@@ -1,0 +1,31 @@
+{
+  "active_profile": "sol_medium",
+  "profiles": {
+    "sol_medium": {
+      "backend": "codex",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "medium",
+      "prompt_version": "sol-calibration-v2",
+      "reference_version": "reference-example-v1",
+      "rubric_version": "qualitative-eight-criteria-v2",
+      "schema_version": "calibration-response-v2",
+      "request_timeout_seconds": 180,
+      "store_response_remotely": false,
+      "codex_executable": "codex",
+      "codex_render_dpi": 200
+    },
+    "luna_xhigh": {
+      "backend": "codex",
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "xhigh",
+      "prompt_version": "sol-calibration-v2",
+      "reference_version": "reference-example-v1",
+      "rubric_version": "qualitative-eight-criteria-v2",
+      "schema_version": "calibration-response-v2",
+      "request_timeout_seconds": 300,
+      "store_response_remotely": false,
+      "codex_executable": "codex",
+      "codex_render_dpi": 200
+    }
+  }
+}

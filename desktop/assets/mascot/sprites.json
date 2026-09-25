@@ -1,0 +1,53 @@
+{
+  "format": "fixed-cell-png",
+  "animations": {
+    "walk": {
+      "file": "cat-walk.png",
+      "frames": 4,
+      "frameWidth": 64,
+      "frameHeight": 64,
+      "fps": 4,
+      "baselineY": 62
+    },
+    "sleep": {
+      "file": "cat-sleep.png",
+      "frames": 3,
+      "frameWidth": 64,
+      "frameHeight": 64,
+      "fps": 1.1,
+      "baselineY": 62
+    },
+    "read": {
+      "file": "cat-read.png",
+      "frames": 4,
+      "frameWidth": 64,
+      "frameHeight": 64,
+      "fps": 1.5,
+      "baselineY": 62
+    },
+    "mark": {
+      "file": "cat-mark.png",
+      "frames": 4,
+      "frameWidth": 64,
+      "frameHeight": 64,
+      "fps": 3,
+      "baselineY": 62
+    },
+    "play": {
+      "file": "cat-play.png",
+      "frames": 3,
+      "frameWidth": 64,
+      "frameHeight": 64,
+      "fps": 2.5,
+      "baselineY": 62
+    },
+    "happy": {
+      "file": "cat-happy.png",
+      "frames": 4,
+      "frameWidth": 64,
+      "frameHeight": 64,
+      "fps": 5,
+      "baselineY": 62
+    }
+  }
+}

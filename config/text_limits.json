@@ -1,0 +1,4 @@
+{
+  "criterion_comment": {"preferred_min": 50, "preferred_max": 80, "hard_max": 90},
+  "teacher_comment": {"preferred_min": 120, "preferred_max": 220, "hard_max": 300}
+}

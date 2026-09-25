@@ -1,0 +1,53 @@
+{
+  "layout_version": "layout-v1",
+  "canvas": {
+    "width": 1024,
+    "height": 1536
+  },
+  "master": {
+    "filename": "visual_master_v1.png",
+    "version": "visual-master-v1",
+    "sha256": "14a9da93f99b36c3604132c5cd7bedfba1ecd55e0dea0565dbb8ee35ff960d66",
+    "width": 1024,
+    "height": 1536
+  },
+  "font": {
+    "path": "NotoSansSC-VF.ttf",
+    "family": "Noto Sans SC",
+    "fallback": false,
+    "sha256": "763146584cf0710223441356b4395e279021b0806c196614377a7a0174ae074a",
+    "weight": 600,
+    "rating_weight": 700
+  },
+  "rating_control": {
+    "arrow_x": 404,
+    "min_arrow_clearance": 12
+  },
+  "fields": {
+    "class_name": {"box": [88, 134, 120, 49], "padding": [0, 0, 0, 0], "font_size": 23, "line_height": 28, "align": "center", "wrap": false, "max_lines": 1},
+    "student_id": {"box": [280, 134, 122, 49], "padding": [0, 0, 0, 0], "font_size": 23, "line_height": 28, "align": "center", "wrap": false, "max_lines": 1},
+    "student_name": {"box": [476, 134, 132, 49], "padding": [0, 0, 0, 0], "font_size": 20, "line_height": 25, "align": "center", "wrap": false, "max_lines": 1},
+    "topic": {"box": [89, 190, 518, 43], "padding": [8, 0, 8, 0], "font_size": 21, "line_height": 27, "align": "left", "wrap": false, "max_lines": 1},
+    "content_score": {"box": [645, 190, 94, 43], "padding": [2, 0, 2, 0], "font_size": 22, "line_height": 27, "align": "center", "wrap": false, "max_lines": 1},
+    "language_structure_score": {"box": [752, 190, 116, 43], "padding": [2, 0, 2, 0], "font_size": 22, "line_height": 27, "align": "center", "wrap": false, "max_lines": 1},
+    "total_score": {"box": [884, 190, 108, 43], "padding": [2, 0, 2, 0], "font_size": 22, "line_height": 27, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.审题扣题.rating": {"box": [294, 380, 96, 59], "padding": [0, 0, 0, 0], "font_size": 15, "line_height": 20, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.审题扣题.short_comment": {"box": [442, 368, 554, 84], "padding": [12, 8, 12, 8], "font_size": 19, "line_height": 27, "align": "left", "wrap": true, "max_lines": 2},
+    "criteria.情节紧凑.rating": {"box": [294, 479, 96, 59], "padding": [0, 0, 0, 0], "font_size": 15, "line_height": 20, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.情节紧凑.short_comment": {"box": [442, 467, 554, 84], "padding": [12, 8, 12, 8], "font_size": 19, "line_height": 27, "align": "left", "wrap": true, "max_lines": 2},
+    "criteria.重点突出.rating": {"box": [294, 583, 96, 59], "padding": [0, 0, 0, 0], "font_size": 15, "line_height": 20, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.重点突出.short_comment": {"box": [442, 571, 554, 84], "padding": [12, 8, 12, 8], "font_size": 19, "line_height": 27, "align": "left", "wrap": true, "max_lines": 2},
+    "criteria.详略得当.rating": {"box": [294, 688, 96, 59], "padding": [0, 0, 0, 0], "font_size": 15, "line_height": 20, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.详略得当.short_comment": {"box": [442, 676, 554, 84], "padding": [12, 8, 12, 8], "font_size": 19, "line_height": 27, "align": "left", "wrap": true, "max_lines": 2},
+    "criteria.情景交融.rating": {"box": [294, 793, 96, 59], "padding": [0, 0, 0, 0], "font_size": 15, "line_height": 20, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.情景交融.short_comment": {"box": [442, 781, 554, 84], "padding": [12, 8, 12, 8], "font_size": 19, "line_height": 27, "align": "left", "wrap": true, "max_lines": 2},
+    "criteria.多感官.rating": {"box": [294, 899, 96, 59], "padding": [0, 0, 0, 0], "font_size": 15, "line_height": 20, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.多感官.short_comment": {"box": [442, 887, 554, 84], "padding": [12, 8, 12, 8], "font_size": 19, "line_height": 27, "align": "left", "wrap": true, "max_lines": 2},
+    "criteria.修辞运用.rating": {"box": [294, 1007, 96, 59], "padding": [0, 0, 0, 0], "font_size": 15, "line_height": 20, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.修辞运用.short_comment": {"box": [442, 995, 554, 84], "padding": [12, 8, 12, 8], "font_size": 19, "line_height": 27, "align": "left", "wrap": true, "max_lines": 2},
+    "criteria.结尾照应／升华.rating": {"box": [294, 1117, 96, 59], "padding": [0, 0, 0, 0], "font_size": 15, "line_height": 20, "align": "center", "wrap": false, "max_lines": 1},
+    "criteria.结尾照应／升华.short_comment": {"box": [442, 1106, 554, 84], "padding": [12, 8, 12, 8], "font_size": 19, "line_height": 27, "align": "left", "wrap": true, "max_lines": 2},
+    "teacher_comment": {"box": [36, 1298, 770, 138], "padding": [14, 12, 14, 12], "font_size": 22, "line_height": 31, "align": "left", "wrap": true, "max_lines": 3}
+  },
+  "criteria_order": ["审题扣题", "情节紧凑", "重点突出", "详略得当", "情景交融", "多感官", "修辞运用", "结尾照应／升华"]
+}

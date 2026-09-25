@@ -1,0 +1,19 @@
+{
+  "rubric_version": "qualitative-eight-criteria-v1",
+  "basis": "The approved rubric currently consists only of the eight named qualitative criteria. No additional criterion definitions or numeric scoring bands are configured.",
+  "criteria": [
+    "审题扣题",
+    "情节紧凑",
+    "重点突出",
+    "详略得当",
+    "情景交融",
+    "多感官",
+    "修辞运用",
+    "结尾照应／升华"
+  ],
+  "numeric_score": {
+    "available": false,
+    "maximum": null,
+    "reason": "The workbook shows content and language/structure columns, but the project contains no verified complete scoring rubric. The calibration response must use a null score."
+  }
+}

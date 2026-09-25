@@ -1,0 +1,19 @@
+{
+  "rubric_version": "qualitative-eight-criteria-v2",
+  "basis": "Exactly eight qualitative criteria. Numeric scores are teacher/import-owned and are excluded from grader output.",
+  "criteria": [
+    "审题扣题",
+    "情节紧凑",
+    "重点突出",
+    "详略得当",
+    "情景交融",
+    "多感官",
+    "修辞运用",
+    "结尾照应／升华"
+  ],
+  "numeric_score": {
+    "available": false,
+    "owner": "teacher_or_import",
+    "fields": ["内容分", "语文与结构分", "总分"]
+  }
+}
