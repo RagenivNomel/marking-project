@@ -85,13 +85,14 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
     if source:
         # Keep implementation IDs, receipts, and checkpoints out of the normal
         # teacher details. The teacher's input references remain inspectable.
-        references = [str(p) for p in (source.split_pile, source.roster) if p]
+        references = [str(p) for p in (source.continuous_scan or source.split_pile, source.roster) if p]
         if source.workbook is not None:
             results_workbook = source.workbook.resolve()
         elif source.results_directory is not None:
             results_workbook = source.results_directory / "results.xlsx"
         elif source.split_pile is not None:
-            results_workbook = teacher_output_paths(source.split_pile).workbook
+            task_root = source.continuous_scan.parent if source.continuous_scan else source.split_pile
+            results_workbook = teacher_output_paths(task_root).workbook
         feedback_cards_dir = source.feedback_cards_directory
         if feedback_cards_dir is None and results_workbook is not None:
             feedback_cards_dir = results_workbook.parent / "Feedback Cards"

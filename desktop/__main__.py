@@ -70,6 +70,7 @@ def main():
     parser.add_argument('--job-root', type=Path, action='append', default=[])
     parser.add_argument('--receipt-root', type=Path, action='append', default=[])
     parser.add_argument('--split-pile', type=Path)
+    parser.add_argument('--continuous-scan', type=Path)
     parser.add_argument('--roster', type=Path)
     parser.add_argument('--identity-decisions', type=Path)
     parser.add_argument('--project-dir', type=Path, help='isolated output and job root for a local verification task')
@@ -81,9 +82,10 @@ def main():
     if args.dev_ui:
         bridge.selectDemo(args.demo)
     bridge.setReducedMotion(args.reduced_motion or prefers_reduced_motion())
-    if any((args.workbook, args.job_root, args.receipt_root, args.split_pile)):
+    if any((args.workbook, args.job_root, args.receipt_root, args.split_pile, args.continuous_scan)):
         bridge.inspect_source(AssignmentSource(workbook=args.workbook, job_roots=tuple(args.job_root),
-            receipt_roots=tuple(args.receipt_root), split_pile=args.split_pile, roster=args.roster,
+            receipt_roots=tuple(args.receipt_root), continuous_scan=args.continuous_scan,
+            split_pile=args.split_pile, roster=args.roster,
             identity_decisions=args.identity_decisions))
     return app.exec()
 

@@ -4,11 +4,14 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import threading
 import time
+import traceback
 from typing import Callable
 
 from pypdf import PdfReader
@@ -25,6 +28,11 @@ from .storage import atomic_json, batch_lock, exclusive_lock, read_json
 
 
 MAX_CONCURRENT_GRADERS = 3
+
+
+def _marking_trace(message):
+    if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        print(f"[marking] {message}", file=sys.stderr, flush=True)
 
 
 def fingerprint(data):
@@ -572,6 +580,7 @@ class Pipeline:
         selected = sorted(records, key=ordering)
         if limit is not None:
             selected = selected[:limit]
+        _marking_trace(f"batch={self.batch_id} selected={len(selected)} source={source_dir}")
         validated = []
         failed = []
         seen = set()
@@ -670,13 +679,18 @@ class Pipeline:
         def grade_one(item):
             key = item["job_id"]
             calibration_namespace = self._calibration_namespace_for_attempt(key)
-            return self.run_real_pdf(
-                item["source_pdf"], item["identity"], essay_question, model_profile,
+            identity = item["identity"]
+            label = f"{identity.class_name} · {identity.student_id} · {identity.student_name}"
+            _marking_trace(f"start student={label}")
+            result = self.run_real_pdf(
+                item["source_pdf"], identity, essay_question, model_profile,
                 persist_workbook=False,
                 execution_namespace=calibration_namespace,
                 fresh_attempt=(calibration_namespace != self.batch_id),
                 timing_callback=lambda event: record_timing(key, event),
             )
+            _marking_trace(f"grader returned student={label} state={result.get('state')}")
+            return result
 
         def display(item):
             identity = item["identity"]
@@ -715,6 +729,9 @@ class Pipeline:
                     try:
                         buffered[item["index"]] = (item, future.result(), None)
                     except Exception as exc:
+                        _marking_trace(f"student failed={item['job_id']} {type(exc).__name__}: {exc}")
+                        if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
+                            traceback.print_exc(file=sys.stderr)
                         buffered[item["index"]] = (item, None, exc)
 
                 # A returned validated result is still in progress until the
@@ -748,6 +765,9 @@ class Pipeline:
                             validated.append({"identity": identity.to_dict(), **result,
                                               "review_status": review_status})
                         except Exception as exc:
+                            _marking_trace(f"persistence failed={item['job_id']} {type(exc).__name__}: {exc}")
+                            if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
+                                traceback.print_exc(file=sys.stderr)
                             failed.append({"identity": identity.to_dict(), "source_pdf": str(item["source_pdf"]),
                                            "error": {"type": type(exc).__name__, "message": str(exc)}})
 

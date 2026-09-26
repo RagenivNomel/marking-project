@@ -18,7 +18,7 @@ Item {
         spacing: Theme.sectionGap
         Text { textFormat: Text.PlainText; text: I18n.tr("我的批改任务　/　新建"); color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.metaSize }
         Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: I18n.tr("新建批改任务"); color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.screenTitleSize; font.weight: Font.Bold; wrapMode: Text.Wrap }
-        Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: I18n.choose("选择作文 PDF 文件夹和学生名册。批改结果和体检卡文件夹会自动创建。", "Choose the essay PDF folder and class roster. The app creates the results workbook and feedback-card folder automatically."); wrapMode: Text.Wrap; color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize }
+        Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: I18n.choose("选择连续扫描 PDF 和学生名册。应用会自动整理作文，批改结果和体检卡文件夹会自动创建。", "Choose the continuous-scan PDF and class roster. The app prepares the essays and creates the results workbook and feedback-card folder automatically."); wrapMode: Text.Wrap; color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize }
 
         GridLayout {
             columns: create.width < 1000 ? 1 : 2
@@ -56,7 +56,7 @@ Item {
                         contentItem: Text { textFormat: Text.PlainText; text: materialType.currentText; color: Theme.secondaryInk; font: materialType.font; verticalAlignment: Text.AlignVCenter; leftPadding: 10 }
                         background: Rectangle { color: Theme.canvas; border.color: Theme.ink; border.width: 2; radius: 7 }
                     }
-                    FileReferenceCard { Layout.fillWidth: true; title: I18n.choose("作文 PDF 文件夹", "Essay PDF Folder"); path: I18n.tr("尚未选择文件夹"); subtitle: I18n.choose("选择包含作文 PDF 的任务文件夹。", "Choose the task folder containing the essay PDFs."); reducedMotion: create.reducedMotion; actionText: I18n.choose("选择作文文件夹", "Choose Essay Folder"); onInspectRequested: create.inspectRequested() }
+                    FileReferenceCard { Layout.fillWidth: true; title: I18n.choose("连续扫描 PDF", "Continuous Scan PDF"); path: I18n.tr("尚未选择 PDF"); subtitle: I18n.choose("选择包含全班连续扫描内容的一份 PDF。", "Choose the single PDF containing the continuous class scan."); reducedMotion: create.reducedMotion; actionText: I18n.choose("选择连续扫描", "Choose Continuous Scan"); onInspectRequested: create.inspectRequested() }
                     FileReferenceCard { Layout.fillWidth: true; title: I18n.choose("学生名册", "Class Roster"); path: I18n.tr("尚未选择名单工作簿"); subtitle: I18n.choose("名册用于匹配学生身份。", "The roster is used to match student identities."); reducedMotion: create.reducedMotion; actionText: I18n.choose("选择学生名册", "Choose Class Roster"); onInspectRequested: create.inspectRequested() }
                     NeoButton { text: I18n.choose("选择作文和名册", "Choose Essays and Roster"); primary: true; enabled: true; reducedMotion: create.reducedMotion; onClicked: create.inspectRequested() }
                     Text { textFormat: Text.PlainText; text: I18n.tr("选择文件不会发起 AI批改。下一步会核对每份作文与学生身份。"); color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.metaSize; wrapMode: Text.Wrap }

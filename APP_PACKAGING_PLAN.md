@@ -73,7 +73,7 @@ The current real grader depends on either an installed Codex command with its ow
 
 Fresh model output is not guaranteed identical even with identical input and instructions; [OpenAI's model optimization guidance](https://developers.openai.com/api/docs/guides/model-optimization) explicitly describes this variability. The practical guarantee is reproducible processing with recorded inputs/settings and replay of saved marking results. Record model identity and settings alongside PDF, prompt, rubric, template and software versions.
 
-The code already supplies isolated marking, per-job snapshots, strict result validation, workbook persistence and deterministic card rendering. The production batch entry point currently consumes an existing split pile plus reviewed identity decisions and stops at `VALIDATED/PENDING`. The missing app work is:
+The code already supplies continuous-scan preparation, app-owned split workspaces, isolated marking, per-job snapshots, strict result validation, workbook persistence and deterministic card rendering. The production batch entry point still consumes the prepared split records plus reviewed identity decisions and stops at `VALIDATED/PENDING`. The missing app work is:
 
 1. A single batch service joining raw-PDF intake, identity decisions, marking, review and export, with a batch manifest and frozen settings.
 2. A desktop interface for those stages, settings editing, a small before/after marking comparison and the design picker.

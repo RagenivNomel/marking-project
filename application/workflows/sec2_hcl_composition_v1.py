@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+import re
 
 from openpyxl import load_workbook
 
@@ -24,6 +25,7 @@ from excel.workbook import ExcelStore, read_roster, roster_text
 from grading.calibration_schema import CalibrationValidator
 from grading.schemas import Identity, ROOT, ValidationError, Validator
 from scanning.intake import apply_identity_decisions, read_existing_split
+from scanning.split_by_student import split_continuous_anonymous
 from workflow.state import State
 from workflow.storage import atomic_json, batch_lock, lock_is_active, read_json
 from .task_storage import legacy_output_paths, teacher_output_paths
@@ -83,10 +85,54 @@ class CompositionWorkflow:
         self.render_pipeline_factory = render_pipeline_factory
 
     @staticmethod
+    def _teacher_root(source: AssignmentSource) -> Path:
+        """Return the teacher-facing folder for task outputs."""
+        if source.continuous_scan is not None:
+            return _path(source.continuous_scan).parent
+        if source.split_pile is not None:
+            return _path(source.split_pile)
+        raise ValidationError("A continuous scan or prepared composition folder is required")
+
+    @staticmethod
+    def _scan_workdir(scan: Path) -> Path:
+        digest = sha256(scan.read_bytes()).hexdigest()[:12]
+        safe_stem = re.sub(r"[^0-9A-Za-z_.\-\u4e00-\u9fff]+", "_", scan.stem).strip("._") or "scan"
+        return scan.parent / f".{safe_stem}.essay-work-{digest}"
+
+    def prepare_source(self, source: AssignmentSource) -> AssignmentSource:
+        """Turn a teacher-selected continuous PDF into an app-owned split pile."""
+        if source.continuous_scan is None or source.split_pile is not None:
+            return source
+        scan = _path(source.continuous_scan)
+        if not scan.is_file() or scan.suffix.lower() != ".pdf":
+            raise ValidationError("Choose a continuous-scan PDF")
+
+        workdir = self._scan_workdir(scan)
+        if workdir.exists():
+            try:
+                master = workdir / "_continuous.pdf"
+                if not master.is_file() or _hash(master) != _hash(scan):
+                    raise ValidationError("The generated continuous-PDF copy does not match the selected scan")
+                read_existing_split(workdir)
+            except Exception as exc:
+                raise ValidationError(
+                    f"The app-owned scan workspace is incomplete or invalid: {workdir}: {exc}"
+                ) from exc
+        else:
+            split_continuous_anonymous(scan, workdir)
+            if _hash(workdir / "_continuous.pdf") != _hash(scan):
+                raise ValidationError("The generated continuous-PDF copy does not match the selected scan")
+            read_existing_split(workdir)
+        return replace(source, split_pile=workdir)
+
+    @staticmethod
     def marking_batch_id(source: AssignmentSource) -> str:
-        if source.split_pile is None:
-            raise ValueError("A prepared composition folder is required")
-        stable_path = str(_path(source.split_pile)).casefold()
+        if source.continuous_scan is not None:
+            stable_path = str(_path(source.continuous_scan)).casefold()
+        elif source.split_pile is not None:
+            stable_path = str(_path(source.split_pile)).casefold()
+        else:
+            raise ValueError("A continuous scan or prepared composition folder is required")
         return "teacher_" + sha256(stable_path.encode("utf-8")).hexdigest()[:20]
 
     @staticmethod
@@ -118,7 +164,7 @@ class CompositionWorkflow:
             return source
         batch = self.marking_batch_id(source)
         jobs = (self.project_dir / "jobs" / batch).resolve()
-        current_paths = teacher_output_paths(source.split_pile)
+        current_paths = teacher_output_paths(self._teacher_root(source))
         legacy_paths = legacy_output_paths(self.project_dir, batch)
         workbook_candidates = (current_paths.workbook, legacy_paths.workbook)
         attached_jobs = source.job_roots
@@ -180,11 +226,12 @@ class CompositionWorkflow:
         )
 
     def inspect(self, source: AssignmentSource) -> Inspection:
+        source = self.prepare_source(source)
         source = self.marking_source(source)
         if source.split_pile is not None and source.workbook is not None:
             batch = self.marking_batch_id(source)
             allowed = {
-                teacher_output_paths(source.split_pile).workbook.resolve(),
+                teacher_output_paths(self._teacher_root(source)).workbook.resolve(),
                 legacy_output_paths(self.project_dir, batch).workbook.resolve(),
             }
             if _path(source.workbook) not in allowed:
@@ -279,7 +326,7 @@ class CompositionWorkflow:
                         metadata = dict(job_id=job, excel_row=number, input_digest=audit[4].value, pipeline_status=audit[5].value)
                     entry.record, entry.audit = record, metadata
                     entry.confirmed = entry.grading = True
-                except Exception:
+                except Exception as exc:
                     entry.issue("WORKBOOK_ROW_INVALID", "这份作文的审核数据需要检查，原文没有被修改。", exc)
         finally:
             book.close()
@@ -509,8 +556,8 @@ class CompositionWorkflow:
                     entry.issue("CARD_SOURCE_UNAPPROVED", "已有体检卡，但当前审核数据尚未确认有效。", str(path))
                     continue
                 expected_teacher_output = None
-                if source.split_pile is not None and workbook == teacher_output_paths(source.split_pile).workbook.resolve():
-                    public_dir = teacher_output_paths(source.split_pile).feedback_cards_directory
+                if source.split_pile is not None and workbook == teacher_output_paths(self._teacher_root(source)).workbook.resolve():
+                    public_dir = teacher_output_paths(self._teacher_root(source)).feedback_cards_directory
                     expected_teacher_output = public_dir / feedback_card_filename(entry.record)
                 okay, code, detail = inspect_card(
                     path, workbook, entry.key, entry.audit["excel_row"],
@@ -592,6 +639,7 @@ class CompositionWorkflow:
 
     def _feedback_source(self, source):
         """Bind rendering to this app's matching output/jobs batch only."""
+        source = self.prepare_source(source)
         source = self.marking_source(source)
         if source.workbook is None:
             raise ValidationError("Read the approved results workbook before generating feedback")
@@ -600,7 +648,7 @@ class CompositionWorkflow:
             raise ValidationError("Two results workbooks exist for this task; resolve the workbook location before generating feedback")
         if source.split_pile is not None:
             batch_id = self.marking_batch_id(source)
-            expected_workbook = ((source.results_directory or teacher_output_paths(source.split_pile).results_directory)
+            expected_workbook = ((source.results_directory or teacher_output_paths(self._teacher_root(source)).results_directory)
                                  / "results.xlsx").resolve()
             if workbook not in {
                 expected_workbook,
@@ -819,6 +867,7 @@ class CompositionWorkflow:
         """Run the existing one-student production batch behind the app seam."""
         from grading.schemas import ValidationError
         from scanning.intake import apply_identity_decisions, read_existing_split
+        source = self.prepare_source(source)
         if source.split_pile is None or source.roster is None or source.identity_decisions is None:
             raise ValidationError("Choose a prepared composition folder, roster and confirmed student identities first")
 
@@ -831,7 +880,7 @@ class CompositionWorkflow:
 
         batch_id = self.marking_batch_id(source)
         expected_jobs = (self.project_dir / "jobs" / batch_id).resolve()
-        expected_workbook = ((source.results_directory or teacher_output_paths(source.split_pile).results_directory)
+        expected_workbook = ((source.results_directory or teacher_output_paths(self._teacher_root(source)).results_directory)
                              / "results.xlsx").resolve()
         if any(_path(root) != expected_jobs for root in source.job_roots):
             raise ValidationError("This assignment is linked to other saved marking records; read those records before starting a new run")

@@ -334,6 +334,43 @@ class ApplicationWorkflowTests(unittest.TestCase):
         )
         return split, roster, decisions, source_pdf
 
+    def test_continuous_scan_prepares_an_app_owned_split_workspace(self):
+        continuous = self.root / "class-scan.pdf"
+        continuous.write_bytes(b"continuous scan fixture")
+        source = AssignmentSource(continuous_scan=continuous, roster=self.root / "roster.xlsx")
+
+        def fake_split(scan, workdir):
+            workdir.mkdir(parents=True)
+            shutil.copyfile(scan, workdir / "_continuous.pdf")
+
+        with patch("application.workflows.sec2_hcl_composition_v1.split_continuous_anonymous", side_effect=fake_split) as split, \
+             patch("application.workflows.sec2_hcl_composition_v1.read_existing_split", return_value=[]):
+            prepared = self.controller.prepare_source(source)
+            prepared_again = self.controller.prepare_source(prepared)
+
+        self.assertIsNotNone(prepared.split_pile)
+        self.assertTrue(str(prepared.split_pile).startswith(str(self.root)))
+        self.assertEqual(prepared_again, prepared)
+        split.assert_called_once()
+
+    def test_inspection_accepts_continuous_scan_without_teacher_manifest(self):
+        identity = self._identity()
+        prepared, roster, _, source_pdf = self._write_split_source(identity)
+        continuous = self.root / "incoming-class-scan.pdf"
+        continuous.write_bytes((prepared / "_continuous.pdf").read_bytes())
+        source = AssignmentSource(continuous_scan=continuous, roster=roster)
+
+        def fake_split(scan, workdir):
+            shutil.copytree(prepared, workdir)
+
+        with patch("application.workflows.sec2_hcl_composition_v1.split_continuous_anonymous", side_effect=fake_split):
+            inspection = self.controller.inspect(source)
+
+        self.assertEqual(inspection.summary["submissions"], 1)
+        workdir = CompositionWorkflow._scan_workdir(continuous)
+        self.assertEqual(inspection.submissions[0].submission_id, f"submission:{(workdir / source_pdf.name).resolve()}")
+        self.assertEqual({item.code for item in inspection.submissions[0].attention}, {"IDENTITY_UNRESOLVED"})
+
     def _write_checkpoint(
         self,
         identity,

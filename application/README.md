@@ -31,8 +31,11 @@ Paths above are relative to the project working directory. Application callers
 should normally supply absolute paths. Select only the roots belonging to the
 assignment; this API does not search the entire repository or infer ownership
 from student names. `job_roots` optionally adds saved grading jobs; `receipt_roots`
-adds rendering receipts. A split pile, roster and identity decisions can describe
-pre-marking work. These are references, not a new assignment database.
+adds rendering receipts. A continuous scan, roster and identity decisions can
+describe pre-marking work. When a continuous scan is supplied, the workflow
+creates and validates an app-owned split workspace before inspection; its
+manifest is internal metadata, not a teacher prerequisite. These are
+references, not a new assignment database.
 
 The delivered workbook above has a different path from the workbook recorded in
 the historical card receipts. Strict inspection reports that provenance mismatch;

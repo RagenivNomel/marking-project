@@ -53,10 +53,12 @@ states cannot replace the normal teacher journey accidentally.
 
 ## Stage 3A: confirm student information
 
-When a submission folder contains split PDFs, the normal **选择作文** dialog
-also asks for **学生名册 / Class Roster**. It can use a local class roster
+The normal **选择作文** dialog asks for one continuous-scan PDF and a
+**学生名册 / Class Roster**. The app creates an internal split workspace,
+including the page-boundary metadata and optional name previews; the teacher
+does not supply or repair a manifest. It can use a local class roster
 workbook. The app also attaches an existing project-owned identity-decision
-file using the folder's deterministic name.
+file using the scan's deterministic working name.
 
 If Stage 1 has already received strong roster decisions, the read is immediately
 resolved. Otherwise the workspace shows **学生资料确认** rather than one error
@@ -122,17 +124,18 @@ re-inspects those persisted artifacts.
 
 ## Inspect an existing assignment
 
-The normal **选择作文** dialog accepts a submission folder and class roster.
-Results are discovered automatically. Workbook and evidence selectors remain
-available in the developer import workflow. Explicit existing
-locations can also be supplied at launch:
+The normal **选择作文** dialog accepts a continuous-scan PDF and class roster.
+Results are discovered automatically. Workbook and evidence selectors, plus
+the legacy split-pile selector, remain available in the developer import
+workflow. Explicit existing locations can also be supplied at launch:
 
 ```powershell
 .\launch-desktop.cmd --workbook $env:LOCAL_RESULTS_WORKBOOK --job-root $env:LOCAL_JOB_ROOT
 ```
 
 Optional arguments include `--receipt-root` (repeatable), `--split-pile`,
-`--roster`, `--identity-decisions`, `--language`, and `--reduced-motion`.
+`--continuous-scan`, `--roster`, `--identity-decisions`, `--language`, and
+`--reduced-motion`.
 Returning home does not create a persistent recent-task database. The current
 assignment view is rebuilt from the selected files and saved marking artifacts.
 

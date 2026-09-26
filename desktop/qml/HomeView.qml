@@ -27,7 +27,7 @@ Item {
         }
         Text {
             textFormat: Text.PlainText; Layout.fillWidth: true
-            text: I18n.choose("选择作文 PDF 文件夹和学生名册，然后跟随页面上的下一步。", "Choose the essay PDF folder and class roster, then follow the next step shown here.")
+            text: I18n.choose("选择连续扫描 PDF 和学生名册，然后跟随页面上的下一步。", "Choose the continuous-scan PDF and class roster, then follow the next step shown here.")
             color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize
             horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
         }

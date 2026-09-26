@@ -18,6 +18,10 @@ class WorkflowController:
     def inspect(self, source: AssignmentSource):
         return self.workflow.inspect(source)
 
+    def prepare_source(self, source: AssignmentSource):
+        """Prepare a raw continuous scan before the read-only inspection."""
+        return self.workflow.prepare_source(source)
+
     def bind_source(self, source: AssignmentSource):
         """Return deterministic app-owned result paths when they already exist."""
         return self.workflow.marking_source(source)

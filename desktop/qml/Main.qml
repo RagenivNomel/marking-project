@@ -182,7 +182,7 @@ ApplicationWindow {
         reducedMotion: root.reducedMotion
         developerMode: root.developerMode
         defaultRosterPath: bridge.defaultRosterPath
-        onInspectRequested: function(workbook,jobs,receipts,splitPile,roster) { bridge.inspectPaths(workbook,jobs,receipts,splitPile,roster) }
+        onInspectRequested: function(workbook,jobs,receipts,splitPile,roster,continuousScan) { bridge.inspectPaths(workbook,jobs,receipts,splitPile,roster,continuousScan) }
     }
     Component { id: homeComponent; HomeView { appState: root.bridgeState; demoKey: root.currentScenario; reducedMotion: root.reducedMotion; developerMode: root.developerMode; onNavigateRequested: function(view) { bridge.navigate(view) }; onInspectRequested: inspectDialog.open() } }
     Component { id: emptyComponent; EmptyView { reducedMotion: root.reducedMotion; onCreateRequested: bridge.navigate("create") } }

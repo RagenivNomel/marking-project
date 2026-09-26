@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from pypdf import PdfReader, PdfWriter
 from grading.schemas import ROOT
-from scanning.split_by_student import legacy_splitter, scan_anonymous
+from scanning.split_by_student import legacy_splitter, scan_anonymous, split_continuous_anonymous
 from scanning.intake import SplitSubmission, apply_identity_decisions, read_existing_split
 from grading.schemas import Identity, ValidationError
 from tests.local_fixtures import require_local_fixtures
@@ -97,6 +97,22 @@ class ScannerRegressionTests(unittest.TestCase):
             records = read_existing_split(root)
             self.assertEqual([(r.source_pdf, r.start_page_idx, r.pages) for r in records],
                              [("renamed-a.pdf", 0, 2), ("renamed-b.pdf", 2, 1)])
+
+    def test_continuous_scan_exports_neutral_split_and_internal_manifest(self):
+        with local_test_directory("continuous-scan") as directory:
+            root = Path(directory)
+            continuous = root / "class-scan.pdf"
+            writer = PdfWriter()
+            for width in (101, 102, 103, 104):
+                writer.add_blank_page(width=width, height=200)
+            writer.write(continuous)
+            analysis = [page(0), page(1), page(2, name="李四"), page(3)]
+            with patch("scanning.split_by_student.legacy_splitter", return_value=self.engine), patch.object(self.engine, "analyze_front_pages", return_value=analysis), patch.object(self.engine, "save_name_preview", return_value="mock-preview.png"):
+                result = split_continuous_anonymous(continuous, root / "work")
+            self.assertEqual([Path(e["file"]).name for e in result["written"]], ["submission_001.pdf", "submission_002.pdf"])
+            self.assertTrue((root / "work" / "_manifest.csv").is_file())
+            self.assertTrue((root / "work" / "_continuous.pdf").is_file())
+            self.assertEqual((root / "work" / "_continuous.pdf").read_bytes(), continuous.read_bytes())
 
     def test_identity_decisions_keep_confirmation_required_status(self):
         submission = SplitSubmission(1, "one.pdf", 0, 4, "", "name.png")

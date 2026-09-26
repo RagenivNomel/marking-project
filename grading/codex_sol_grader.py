@@ -6,13 +6,20 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
+import traceback
 from typing import Callable, Sequence
 import uuid
 
 from pdf2image import convert_from_bytes
 
 from .sol_grader import CredentialUnavailable, ModelCallError, SUPPORTED_MODELS, SolGradingInput
+
+
+def _marking_trace(message):
+    if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        print(f"[codex] {message}", file=sys.stderr, flush=True)
 
 
 class CodexUnavailable(CredentialUnavailable):
@@ -113,8 +120,9 @@ class CodexSolGrader:
         self.workspace_parent = Path(workspace_parent) if workspace_parent else None
 
     def _check(self, arguments: list[str]):
+        _marking_trace(f"preflight executable={self.codex_executable!r} args={arguments!r}")
         try:
-            return self.process_runner(
+            result = self.process_runner(
                 [self.codex_executable, *arguments],
                 cwd=None,
                 input=None,
@@ -126,7 +134,12 @@ class CodexSolGrader:
                 env=_minimal_environment(),
                 check=False,
             )
+            _marking_trace(f"preflight returncode={result.returncode}")
+            return result
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+            _marking_trace(f"preflight exception={type(exc).__name__}: {exc}")
+            if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
+                traceback.print_exc(file=sys.stderr)
             raise CodexUnavailable(f"Codex CLI preflight failed: {type(exc).__name__}") from None
 
     def ensure_ready(self):

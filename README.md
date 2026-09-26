@@ -18,15 +18,15 @@ PDF/roster intake → identity resolution → marking → results workbook → t
 
 ## Development setup
 
-Install the desktop and core Python dependencies, then launch the desktop application:
+Install the desktop, scanning and core Python dependencies, then launch the desktop application:
 
 ```powershell
 python -m pip install -r requirements-desktop.txt
 python -B -m desktop
 ```
 
-Scanning additionally requires the packages in `requirements-scanning.txt` and
-locally installed Tesseract and Poppler executables. Real grading requires a
+Continuous-scan preparation also requires locally installed Tesseract and
+Poppler executables. Real grading requires a
 configured external grading provider and its locally managed credentials.
 
 ## Tests

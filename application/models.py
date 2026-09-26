@@ -35,11 +35,13 @@ class AssignmentSource:
 
     job_roots may include a production batch and its associated calibration jobs.
     receipt_roots identify card job/output directories, not the whole repository.
-    A split pile optionally uses existing roster and identity-decision files.
+    A source may be a raw continuous scan or an already-prepared split pile.
+    The split pile is app-owned when it is derived from continuous_scan.
     """
     workbook: Path | None = None
     job_roots: tuple[Path, ...] = ()
     receipt_roots: tuple[Path, ...] = ()
+    continuous_scan: Path | None = None
     split_pile: Path | None = None
     roster: Path | None = None
     identity_decisions: Path | None = None

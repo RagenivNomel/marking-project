@@ -44,9 +44,13 @@ class ReadTask(QRunnable):
 
     def run(self):
         try:
+            source = (self.controller.prepare_source(self.source)
+                      if hasattr(self.controller, 'prepare_source') else self.source)
+            source = (self.controller.bind_source(source)
+                      if hasattr(self.controller, 'bind_source') else source)
             method = self.controller.refresh_review_status if self.refresh else self.controller.inspect
-            result = method(self.source)
-            self.signals.finished.emit(result, self.source, '')
+            result = method(source)
+            self.signals.finished.emit(result, source, '')
         except Exception as exc:
             self.signals.finished.emit(None, self.source, str(exc))
 
@@ -241,8 +245,8 @@ class DesktopBridge(QObject):
         self._state['reducedMotion'] = value
         self.changed.emit()
 
-    @Slot(str, str, str, str, str)
-    def inspectPaths(self, workbook, jobs, receipts, split_pile, roster):
+    @Slot(str, str, str, str, str, str)
+    def inspectPaths(self, workbook, jobs, receipts, split_pile, roster, continuous_scan):
         def one(value):
             value = value.strip().strip('"')
             if value.startswith('file:'):
@@ -252,10 +256,12 @@ class DesktopBridge(QObject):
             return tuple(one(p) for p in value.split(';') if p.strip())
         source = AssignmentSource(workbook=one(workbook), job_roots=many(jobs),
                                   receipt_roots=many(receipts), split_pile=one(split_pile),
-                                  roster=one(roster))
+                                  roster=one(roster), continuous_scan=one(continuous_scan))
         source = resolve_identity_companions(source)
-        if not any((source.workbook, source.job_roots, source.receipt_roots, source.split_pile)):
-            self._state['notice'] = ('Specify an existing workbook or composition folder, then read it.' if self._language == 'en' else '请指定已有工作簿或作文资料文件夹，然后读取。')
+        if not any((source.workbook, source.job_roots, source.receipt_roots,
+                    source.split_pile, source.continuous_scan)):
+            self._state['notice'] = ('Specify an existing workbook, composition folder, or continuous-scan PDF, then read it.'
+                                     if self._language == 'en' else '请指定已有工作簿、作文资料文件夹或连续扫描 PDF，然后读取。')
             self.changed.emit()
             return
         self.inspect_source(source)
@@ -268,7 +274,16 @@ class DesktopBridge(QObject):
             source = self._controller.bind_source(source)
         self._busy = True
         self.busyChanged.emit()
-        self._state['notice'] = ('Reading the selected local materials without changing them.' if self._language == 'en' else '正在读取指定的本地资料；不会更改文件。')
+        preparing = source.continuous_scan is not None and source.split_pile is None
+        self._state['notice'] = (
+            'Preparing the continuous scan and reading the selected local materials.'
+            if preparing and self._language == 'en' else
+            '正在整理连续扫描并读取指定的本地资料。'
+            if preparing else
+            'Reading the selected local materials without changing them.'
+            if self._language == 'en' else
+            '正在读取指定的本地资料；不会更改文件。'
+        )
         self.changed.emit()
         task = ReadTask(self._controller, source, refresh)
         task.signals.finished.connect(self._finished)

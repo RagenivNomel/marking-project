@@ -41,7 +41,7 @@ No verified installer or clean-machine release was established by this review. T
 
 | Planned feature | Remaining integration |
 | --- | --- |
-| Raw front/back scans | Guided pairing, page previews/accounting and recoverable scanning inside the app; the current normal journey begins with split PDFs. |
+| Raw continuous scan | The normal journey now accepts one continuous PDF, runs the anonymous splitter inside the app, and keeps generated split metadata internal. Guided front/back pairing remains separate work. |
 | Review beside the paper | PDF and editable feedback in one app view, if still desired; Excel review already provides the current workflow. |
 | Settings and marking comparison | Teacher-facing settings editor, revisions and controlled before/after comparison. |
 | Design library | Versioned design packs, portable fonts, previews, validation and a design picker. |

@@ -43,6 +43,20 @@ Real jobs additionally retain source PDFs, source hashes, configuration/prompt s
 - Output/side effects: ordered SplitSubmission records only; no scan, roster, workbook, job, or grade write. Ambiguous page-content matches fail rather than guess.
 - CLI: run_pipeline.py intake --pile ... --workbook ... --decisions ... [--out ...]. Without --out it is read-only; --out writes one atomic JSON intake report.
 
+### Scanning: continuous PDF intake
+
+- Functions: `scanning.split_by_student.split_continuous_anonymous` and the
+  workflow's `prepare_source` adapter.
+- Input: one continuous scan PDF selected by the teacher; the class roster is
+  supplied separately for identity confirmation.
+- Behavior: copies the scan into an app-owned working directory, detects
+  submission boundaries, writes neutral `submission_###.pdf` files, and keeps
+  the generated manifest/name previews internal. OCR names remain evidence
+  only.
+- Repeat/resume: the working directory is keyed by the continuous PDF hash and
+  is validated on reopen; a partial or invalid workspace is surfaced rather
+  than silently reused.
+
 ### Identity and roster decisions
 
 - Functions: excel.workbook.read_roster, scanning.identity.confirm_identity, scanning.intake.apply_identity_decisions; interfaces IdentityCandidate and IdentityResolver are reserved, not active.

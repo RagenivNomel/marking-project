@@ -9,7 +9,7 @@ Dialog {
     property bool reducedMotion: false
     property bool developerMode: false
     property string defaultRosterPath: ""
-    signal inspectRequested(string workbook, string jobs, string receipts, string splitPile, string roster)
+    signal inspectRequested(string workbook, string jobs, string receipts, string splitPile, string roster, string continuousScan)
 
     title: dialog.developerMode ? I18n.tr("检查本地文件引用") : I18n.choose("选择作文", "Choose Submissions")
     header: Item { implicitHeight: 0 }
@@ -38,7 +38,7 @@ Dialog {
         }
         Text { textFormat: Text.PlainText;
             Layout.fillWidth: true
-            text: dialog.developerMode ? I18n.tr("只读取显式路径；不会搜索其他文件夹。") : I18n.choose("选择作文 PDF 文件夹和学生名册。读取资料不会开始批改。", "Choose the essay PDF folder and class roster. Reading them will not start marking.")
+            text: dialog.developerMode ? I18n.tr("只读取显式路径；不会搜索其他文件夹。") : I18n.choose("选择一份连续扫描 PDF 和学生名册。应用会自动整理作文。", "Choose one continuous-scan PDF and the class roster. The app will prepare the essays automatically.")
             color: Theme.secondaryInk
             font.family: Theme.fontFamily
             font.pixelSize: Theme.bodySize
@@ -48,8 +48,10 @@ Dialog {
         NeoButton { visible: dialog.developerMode; text: I18n.tr("选择 Excel 文件"); onClicked: workbookPicker.open(); reducedMotion: dialog.reducedMotion }
         PathField { id: jobsField; visible: dialog.developerMode; label: I18n.tr("批改作业目录"); placeholder: I18n.tr("例如：C:/…/jobs/…") }
         PathField { id: receiptsField; visible: dialog.developerMode; label: I18n.tr("输出回执目录"); placeholder: I18n.tr("例如：C:/…/receipts/…") }
-        PathField { id: splitPileField; label: dialog.developerMode ? I18n.tr("作文分组目录") : I18n.choose("作文 PDF 文件夹", "Essay PDF Folder"); placeholder: I18n.tr("例如：C:/…/pile1_test") }
-        NeoButton { text: I18n.choose("选择作文文件夹", "Choose Essay Folder"); onClicked: folderPicker.open(); reducedMotion: dialog.reducedMotion }
+        PathField { id: splitPileField; visible: dialog.developerMode; label: I18n.tr("作文分组目录"); placeholder: I18n.tr("例如：C:/…/pile1_test") }
+        NeoButton { visible: dialog.developerMode; text: I18n.tr("选择作文分组目录"); onClicked: folderPicker.open(); reducedMotion: dialog.reducedMotion }
+        PathField { id: continuousScanField; visible: !dialog.developerMode; label: I18n.choose("连续扫描 PDF", "Continuous Scan PDF"); placeholder: I18n.tr("例如：C:/…/class-essays.pdf") }
+        NeoButton { visible: !dialog.developerMode; text: I18n.choose("选择连续扫描", "Choose Continuous Scan"); onClicked: scanPicker.open(); reducedMotion: dialog.reducedMotion }
         PathField {
             id: rosterField
             label: I18n.choose("学生名册", "Class Roster")
@@ -59,7 +61,7 @@ Dialog {
         NeoButton { text: I18n.choose("选择学生名册", "Choose Class Roster"); onClicked: rosterPicker.open(); reducedMotion: dialog.reducedMotion }
         Text { textFormat: Text.PlainText;
             Layout.fillWidth: true
-            text: dialog.developerMode ? I18n.tr("只需填写已有资料的位置。文件夹可留空；多个关联文件夹用分号分隔。检查仅会读取保存的内容。") : I18n.choose("结果工作簿和体检卡文件夹会由应用自动管理。", "The app creates and manages the results workbook and feedback-card folder automatically.")
+            text: dialog.developerMode ? I18n.tr("只需填写已有资料的位置。文件夹可留空；多个关联文件夹用分号分隔。检查仅会读取保存的内容。") : I18n.choose("结果工作簿、作文分组资料和体检卡文件夹会由应用自动管理。", "The app manages the split submissions, results workbook and feedback-card folder automatically.")
             color: Theme.secondaryInk
             font.family: Theme.fontFamily
             font.pixelSize: Theme.metaSize
@@ -70,11 +72,11 @@ Dialog {
             text: dialog.developerMode ? I18n.tr("读取这些资料") : I18n.choose("读取并继续", "Read and Continue")
             enabled: dialog.developerMode
                      ? workbookField.value.trim().length > 0 || jobsField.value.trim().length > 0 || receiptsField.value.trim().length > 0 || splitPileField.value.trim().length > 0
-                     : splitPileField.value.trim().length > 0 && rosterField.value.trim().length > 0
+                     : continuousScanField.value.trim().length > 0 && rosterField.value.trim().length > 0
             primary: true
             reducedMotion: dialog.reducedMotion
             onClicked: {
-                dialog.inspectRequested(workbookField.value, jobsField.value, receiptsField.value, splitPileField.value, rosterField.value)
+                dialog.inspectRequested(workbookField.value, jobsField.value, receiptsField.value, splitPileField.value, rosterField.value, continuousScanField.value)
                 dialog.close()
             }
         }
@@ -99,6 +101,12 @@ Dialog {
         title: I18n.choose("选择学生名册", "Choose Class Roster")
         nameFilters: [I18n.tr("Excel 工作簿 (*.xlsx)")]
         onAccepted: rosterField.value = selectedFile.toString()
+    }
+    FileDialog {
+        id: scanPicker
+        title: I18n.choose("选择连续扫描 PDF", "Choose Continuous Scan PDF")
+        nameFilters: [I18n.tr("PDF 文件 (*.pdf)")]
+        onAccepted: continuousScanField.value = selectedFile.toString()
     }
     FolderDialog {
         id: folderPicker
