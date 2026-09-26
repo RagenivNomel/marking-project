@@ -164,7 +164,8 @@ def build_identity_review(source: AssignmentSource, inspection: Inspection, lang
                 selected = candidates[0]["key"]
         preview = header_preview_path(pile, submission)
         if not preview.is_file():
-            preview = (pile / "_name_previews" / submission.name_preview).resolve() if submission.name_preview else None
+            # Older split folders only; new splits no longer save name previews.
+            preview = (pile / "_name_previews"/ submission.name_preview).resolve() if submission.name_preview else None
         rows.append({
             "submissionId": submission_id,
             "sourcePdf": submission.source_pdf,
