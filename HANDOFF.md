@@ -82,7 +82,7 @@ configured. Excel remains the teacher-owned review and approval surface.
   input.
 - Root entry points: `app.py` only re-exports `Pipeline`; `run_pipeline.py`
   exposes mock, roster, intake, real-batch, and rerender CLI commands;
-  `run_calibration.py` runs one controlled calibration; `launch-desktop.cmd`
+  `run_calibration.py` runs one controlled calibration; `Marking App.cmd`
   and `launch-desktop.ps1` launch the UI.
 
 ## 3. Install, run, and test locally
@@ -97,9 +97,9 @@ python -B -X utf8 -m desktop
 Equivalent launcher commands:
 
 ```powershell
-.\launch-desktop.cmd
-.\launch-desktop.cmd --language en
-.\launch-desktop.cmd --dev-ui --demo marking
+& ".\Marking App.cmd"
+& ".\Marking App.cmd" --language en
+& ".\Marking App.cmd" --dev-ui --demo marking
 ```
 
 `requirements-desktop.txt` includes the core and scanning requirements and

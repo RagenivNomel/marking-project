@@ -8,10 +8,10 @@ review and feedback-card generation remain outside this stage.
 
 ## Launch the normal teacher interface
 
-Double-click `launch-desktop.cmd`, or run this from the project folder:
+Double-click `Marking App.cmd`, or run this from the project folder:
 
 ```powershell
-.\launch-desktop.cmd
+& ".\Marking App.cmd"
 ```
 
 The normal interface opens with **Choose Essays / 选择作文**. Its new-task selector asks for the essay PDF folder and class roster only; results and card destinations are managed by the app. After existing evidence is loaded,
@@ -23,7 +23,7 @@ retains its inspection controls; Windows keeps native dragging and window button
 To start in English:
 
 ```powershell
-.\launch-desktop.cmd --language en
+& ".\Marking App.cmd" --language en
 ```
 
 The launcher runs the project's own `.venv` (Python 3.12). Create it once
@@ -48,13 +48,13 @@ The original fourteen-state selector, navigation sidebar and workflow tabs are
 preserved only in the clearly marked developer interface:
 
 ```powershell
-.\launch-desktop.cmd --dev-ui
+& ".\Marking App.cmd" --dev-ui
 ```
 
 Open a specific fixture with `--demo`, for example:
 
 ```powershell
-.\launch-desktop.cmd --dev-ui --demo marking
+& ".\Marking App.cmd" --dev-ui --demo marking
 ```
 
 `--demo` is intentionally ignored unless `--dev-ui` is also present, so fixture
@@ -139,7 +139,7 @@ the legacy split-pile selector, remain available in the developer import
 workflow. Explicit existing locations can also be supplied at launch:
 
 ```powershell
-.\launch-desktop.cmd --workbook $env:LOCAL_RESULTS_WORKBOOK --job-root $env:LOCAL_JOB_ROOT
+& ".\Marking App.cmd" --workbook $env:LOCAL_RESULTS_WORKBOOK --job-root $env:LOCAL_JOB_ROOT
 ```
 
 Optional arguments include `--receipt-root` (repeatable), `--split-pile`,
