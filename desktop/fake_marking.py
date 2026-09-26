@@ -44,7 +44,8 @@ class FakeGrader:
                 "output_text": json.dumps(output, ensure_ascii=False)}
 
 
-def fake_marking_controller(project_dir: Path = FAKE_PROJECT_DIR):
+def fake_marking_controller(project_dir: Path = FAKE_PROJECT_DIR,
+                            workflow_id: str = "sec2_hcl_composition_v1"):
     from application import WorkflowController
     from workflow.calibration_pipeline import CalibrationPipeline
     from workflow.pipeline import Pipeline
@@ -57,4 +58,4 @@ def fake_marking_controller(project_dir: Path = FAKE_PROJECT_DIR):
                         real_pipeline_factory=calibration_factory, workbook_path=workbook_path)
 
     Path(project_dir).mkdir(parents=True, exist_ok=True)
-    return WorkflowController(project_dir=project_dir, pipeline_factory=pipeline_factory)
+    return WorkflowController(workflow_id, project_dir=project_dir, pipeline_factory=pipeline_factory)

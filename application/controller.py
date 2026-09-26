@@ -1,15 +1,14 @@
-"""The application boundary for one supported composition workflow."""
+"""The application boundary for one registered workflow."""
 from .models import AssignmentSource
 
 
 class WorkflowController:
     def __init__(self, workflow_id="sec2_hcl_composition_v1", *, project_dir=None,
                  pipeline_factory=None, render_pipeline_factory=None):
-        if workflow_id != "sec2_hcl_composition_v1":
-            raise ValueError(f"Unsupported workflow: {workflow_id}")
-        from .workflows.sec2_hcl_composition_v1 import CompositionWorkflow
+        from .workflows.registry import get_workflow
         from grading.schemas import ROOT
-        self.workflow = CompositionWorkflow(
+        workflow_class = get_workflow(workflow_id).workflow_class
+        self.workflow = workflow_class(
             project_dir=project_dir or ROOT,
             pipeline_factory=pipeline_factory,
             render_pipeline_factory=render_pipeline_factory,
