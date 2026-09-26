@@ -26,12 +26,21 @@ To start in English:
 .\launch-desktop.cmd --language en
 ```
 
-The launcher uses an isolated `.desktop-deps` folder. It does not change
-production `app.py` or production requirements. Its direct equivalent is:
+The launcher runs the project's own `.venv` (Python 3.12). Create it once
+from the project folder:
 
 ```powershell
-python -B -X utf8 -m desktop
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-desktop.txt
 ```
+
+The launcher's direct equivalent is:
+
+```powershell
+.venv\Scripts\python.exe -B -X utf8 -m desktop
+```
+
+Continuous-scan intake also needs the Tesseract and Poppler programs on `PATH`.
 
 ## Developer and QA interface
 
