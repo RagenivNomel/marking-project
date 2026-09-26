@@ -114,6 +114,22 @@ class ScannerRegressionTests(unittest.TestCase):
             self.assertTrue((root / "work" / "_continuous.pdf").is_file())
             self.assertEqual((root / "work" / "_continuous.pdf").read_bytes(), continuous.read_bytes())
 
+    def test_continuous_scan_split_saves_no_name_previews(self):
+        with local_test_directory("continuous-no-previews") as directory:
+            root = Path(directory)
+            continuous = root / "class-scan.pdf"
+            writer = PdfWriter()
+            for width in (101, 102, 103, 104):
+                writer.add_blank_page(width=width, height=200)
+            writer.write(continuous)
+            analysis = [page(0), page(1), page(2, name="李四"), page(3)]
+            with patch("scanning.split_by_student.legacy_splitter", return_value=self.engine), \
+                 patch.object(self.engine, "analyze_front_pages", return_value=analysis), \
+                 patch("pdf2image.convert_from_path", side_effect=AssertionError("no page renders")):
+                split_continuous_anonymous(continuous, root / "work")
+            self.assertFalse((root / "work" / "_name_previews").exists())
+            self.assertEqual([r.name_preview for r in read_existing_split(root / "work")], ["", ""])
+
     def test_identity_decisions_keep_confirmation_required_status(self):
         submission = SplitSubmission(1, "one.pdf", 0, 4, "", "name.png")
         roster = [Identity("1", "学生甲", "207")]

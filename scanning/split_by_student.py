@@ -39,11 +39,14 @@ def scan_anonymous(piles, outdir, tessdata_dir=ROOT / "tessdata"):
 def split_continuous_anonymous(continuous_path, outdir, tessdata_dir=ROOT / "tessdata"):
     """Split one continuous scan into neutral submission PDFs.
 
-    The generated manifest and name previews stay inside the app-owned
-    working directory; OCR remains evidence only and never assigns a roster
-    identity.
+    The generated manifest stays inside the app-owned working directory; OCR
+    remains evidence only and never assigns a roster identity. No name-zone
+    previews are saved: the teacher confirms students from the header
+    previews that scanning.roster_matcher crops.
     """
     engine = legacy_splitter()
+    # This fresh copy of the preserved splitter is used only for this split.
+    engine.save_name_preview = lambda pdf_path, page_idx, outdir: ""
     continuous_path = Path(continuous_path).resolve()
     outdir = Path(outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=False)
