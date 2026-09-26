@@ -60,6 +60,8 @@ class ReadTask(QRunnable):
             source = (self.controller.prepare_source(self.source)
                       if hasattr(self.controller, 'prepare_source') else self.source)
             source = with_decisions_dir(source, self.decisions_dir)
+            # A continuous scan has its workspace only now: reattach its saved confirmations.
+            source = resolve_identity_companions(source)
             # Only scans the app splits itself; pre-built piles are already labelled.
             if self.identity_matcher is not None and self.source.continuous_scan is not None:
                 try:
