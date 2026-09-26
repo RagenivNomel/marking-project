@@ -9,6 +9,8 @@ from PySide6.QtCore import QObject, Property, QRunnable, QThreadPool, Signal, Sl
 from PySide6.QtGui import QDesktopServices
 from application import AssignmentSource, WorkflowController
 from application.models import Action
+from application.workflows.registry import WORKFLOWS, get_workflow
+from application.workflows.sec2_hcl_composition_v1 import WORKFLOW_ID as ORIGINAL_WORKFLOW_ID
 from desktop.fixtures import demo_state
 from desktop.identity_confirmation import (
     DEFAULT_ROSTER,
@@ -141,9 +143,15 @@ class DesktopBridge(QObject):
     busyChanged = Signal()
 
     def __init__(self, controller=None, parent=None, *, open_url=None, identity_matcher=None,
-                 identity_decisions_dir=None):
+                 identity_decisions_dir=None, controller_factory=None):
         super().__init__(parent)
-        self._controller = controller or WorkflowController()
+        # Builds the controller for the workflow the teacher selects.
+        self._controller_factory = controller_factory or (
+            (lambda workflow_id: controller) if controller is not None else WorkflowController)
+        # The developer UI and command-line sources predate workflow selection
+        # and keep using the original workflow until one is selected.
+        self._controller = controller or self._controller_factory(ORIGINAL_WORKFLOW_ID)
+        self._selected_workflow = None
         self._identity_matcher = identity_matcher
         self._identity_decisions_dir = identity_decisions_dir
         self._open_url = open_url or QDesktopServices.openUrl
@@ -179,6 +187,47 @@ class DesktopBridge(QObject):
     @Property(str, constant=True)
     def defaultRosterPath(self):
         return str(DEFAULT_ROSTER) if DEFAULT_ROSTER.is_file() else ''
+
+    @Property('QVariantList', constant=True)
+    def workflows(self):
+        return [info.to_dict() for info in WORKFLOWS]
+
+    @Property('QVariantMap', notify=changed)
+    def selectedWorkflow(self):
+        """Empty until the teacher chooses a workflow on the start page."""
+        return self._selected_workflow.to_dict() if self._selected_workflow else {}
+
+    def _clear_session(self):
+        """Forget the loaded task in memory only; saved results stay on disk."""
+        reduced = self._state['reducedMotion']
+        self._source = None
+        self._inspection = None
+        self._real_state = None
+        self._state = demo_state('home', self._language)
+        self._state['reducedMotion'] = reduced
+
+    @Slot(str)
+    def selectWorkflow(self, workflow_id):
+        """Choose a workflow; no task is read until the teacher chooses submissions."""
+        if self._busy:
+            return
+        try:
+            info = get_workflow(workflow_id)
+        except ValueError:
+            return
+        controller = self._controller_factory(info.workflow_id)
+        self._clear_session()
+        self._controller = controller
+        self._selected_workflow = info
+        self.changed.emit()
+
+    @Slot()
+    def showWorkflowList(self):
+        if self._busy:
+            return
+        self._clear_session()
+        self._selected_workflow = None
+        self.changed.emit()
 
     def _attach_identity_review(self, state, source, inspection):
         try:

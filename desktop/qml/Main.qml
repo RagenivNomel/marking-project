@@ -184,7 +184,7 @@ ApplicationWindow {
         defaultRosterPath: bridge.defaultRosterPath
         onInspectRequested: function(workbook,jobs,receipts,splitPile,roster,continuousScan) { bridge.inspectPaths(workbook,jobs,receipts,splitPile,roster,continuousScan) }
     }
-    Component { id: homeComponent; HomeView { appState: root.bridgeState; demoKey: root.currentScenario; reducedMotion: root.reducedMotion; developerMode: root.developerMode; onNavigateRequested: function(view) { bridge.navigate(view) }; onInspectRequested: inspectDialog.open() } }
+    Component { id: homeComponent; HomeView { appState: root.bridgeState; demoKey: root.currentScenario; reducedMotion: root.reducedMotion; developerMode: root.developerMode; workflows: bridge.workflows; selectedWorkflow: bridge.selectedWorkflow; onNavigateRequested: function(view) { bridge.navigate(view) }; onInspectRequested: inspectDialog.open(); onWorkflowSelected: function(workflowId) { bridge.selectWorkflow(workflowId) }; onWorkflowListRequested: bridge.showWorkflowList() } }
     Component { id: emptyComponent; EmptyView { reducedMotion: root.reducedMotion; onCreateRequested: bridge.navigate("create") } }
     Component { id: createComponent; CreateView { appState: root.bridgeState; reducedMotion: root.reducedMotion; onInspectRequested: inspectDialog.open() } }
     Component { id: systemComponent; SystemView { reducedMotion: root.reducedMotion } }
