@@ -7,7 +7,8 @@ from PIL import Image
 
 from application.workflows.card_evidence import inspect_card
 from application.workflows.feedback_rendering import ApprovedFeedbackRenderer
-from application.workflows.task_storage import teacher_output_paths
+from application import AssignmentSource
+from application.workflows.task_storage import task_output_paths
 from grading.schemas import ROOT
 from workflow.pipeline import Pipeline
 from workflow.storage import atomic_json, read_json
@@ -75,7 +76,9 @@ class TaskOutputTests(unittest.TestCase):
         self.project.mkdir()
         self.task = self.root / "essay PDFs"
         self.task.mkdir()
-        self.paths = teacher_output_paths(self.task)
+        scan = self.task / "class scan.pdf"
+        scan.write_bytes(b"offline class scan")
+        self.paths = task_output_paths(AssignmentSource(continuous_scan=scan))
 
     def test_pipeline_writes_one_authoritative_workbook_and_keeps_backups_internal(self):
         pipeline = Pipeline(

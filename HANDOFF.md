@@ -4,6 +4,34 @@ Last checked: 2026-09-26. This handoff describes the current working tree,
 including the uncommitted changes; it is not a description of `origin/main`
 alone.
 
+## Update 2026-09-26: simplified persistence and task identity
+
+Work is on the local branch `simplify-persistence` (not pushed):
+`cf3a640` snapshots the previous uncommitted work, `b8a7da1` replaces partial
+grading recovery, and the next commit moves task identity to the scan hash.
+Where the sections below disagree with this one, this section is current.
+
+- **Done or not done.** An essay is done only when the task workbook holds its
+  valid result row and matching audit row. Anything else is not done: its
+  working folder `jobs/<task>/<essay>/` is discarded (except `output/`, the
+  feedback-card evidence) and it is marked again from scratch. Discards are
+  logged to `jobs/<task>/discarded_attempts.log`, which is never read back.
+- **Removed:** calibration attempt namespaces and `real_grading_attempts.json`
+  lineage, `real_grading_bridge.json` in-progress state, `GRADED`/`VALIDATED`
+  checkpoint resume, `workbook_persistence.json` receipts, checkpoint-based
+  inspection, the historical `output/<batch>/results.xlsx` teacher location,
+  and checkpoint-to-workbook binding. That binding caused the pile 1 failure:
+  every essay's checkpoint named an old workbook path, so all 11 were rejected
+  in milliseconds and nothing was logged.
+- **Task identity** is `task_<first 20 hex of the continuous scan's SHA-256>`.
+  Outputs go to `<scan folder>/Results/<scan name>-<8 hex>/` (for a split
+  pile, `<pile>/Results/<pile name>-<8 hex>/`). Old `jobs/teacher_*` folders
+  and the existing `pile2_test`-`pile4_test/Results/results.xlsx` workbooks are
+  left untouched but are no longer found automatically.
+- Atomic JSON and workbook renames retry briefly on Windows `PermissionError`;
+  the six flaky suite errors came from this.
+- The unbound `exc` bug in workbook-row inspection is fixed.
+
 ## 1. What the app does and who it is for
 
 This is a Windows-first desktop workflow for a teacher marking Secondary 2
@@ -112,11 +140,8 @@ the configured model and writes jobs/workbooks.
   scan PDF + roster intake, app-owned anonymous split workspace, identity
   confirmation, Stage 3B marking, Excel review handoff, and Stage 3C approved
   feedback-card generation.
-- A new continuous-scan task currently writes teacher-facing outputs under the
-  selected scan's containing folder:
-  `Results/results.xlsx` and `Results/Feedback Cards/`. Historical tasks using
-  `output/<batch>/results.xlsx` are still supported. If both locations exist,
-  inspection blocks instead of guessing.
+- A task writes teacher-facing outputs under the selected scan's folder:
+  `Results/<scan name>-<hash>/results.xlsx` and `.../Feedback Cards/`.
 - Marking is isolated per student, can use up to three concurrent grader
   workers, and serializes authoritative workbook persistence. Saved rows are
   excluded from a later Continue operation.
@@ -249,12 +274,13 @@ C:/Class Work/
         submission_002.pdf
         ...
     Results/
-        results.xlsx                      authoritative teacher workbook
-        Feedback Cards/
-            <class>-<number>-<name>-作文体检卡.png
+        class-scan-<8 hex>/
+            results.xlsx                  authoritative teacher workbook
+            Feedback Cards/
+                <class>-<number>-<name>-作文体检卡.png
 
 <project>/
-    jobs/teacher_<path-hash>/              checkpoints and model evidence
+    jobs/task_<content-hash>/              per-essay working folders (transient)
     config/<generated-workspace>_identity_decisions.json
 ```
 
@@ -296,9 +322,8 @@ teacher-facing `Results/` folder contains the workbook and published cards.
 - Stable batch binding uses the resolved original scan path. Existing split-pile
   and explicit workbook/job imports remain available for developer and legacy
   recovery work.
-- Historical `output/<batch>/results.xlsx` remains supported. If both it and the
-  new `Results/results.xlsx` exist, the app reports a conflict rather than
-  selecting one silently.
+- Each scan's content hash owns its jobs folder and results folder; the
+  historical `output/<batch>/` teacher location is no longer used.
 - The feature reuses the existing identity, grading, workbook, approval,
   rendering, and receipt contracts; it does not add another database or result
   format.
@@ -322,13 +347,13 @@ completed for this feature during the current work session.
 
 ### Open defects and design risks specific to this feature
 
-1. **Output collision between scans in one folder.** `_teacher_root()` returns
+1. **(Resolved by content-hash task identity.) Output collision between scans in one folder.** `_teacher_root()` returns
    the continuous scan's parent directory. Two different class-scan PDFs in the
    same folder therefore resolve to the same `Results/results.xlsx` and
    `Results/Feedback Cards/`, even though their job batch IDs differ. Decide
    whether each scan must live in its own folder or whether outputs should use
    a scan-specific task directory; add a blocking test before shipping.
-2. **Replacing a PDF at the same path can mix generations.** The split workspace
+2. **(Resolved by content-hash task identity.) Replacing a PDF at the same path can mix generations.** The split workspace
    name includes a content hash, but `marking_batch_id()` hashes the resolved
    path, not the file contents. Replacing the scan bytes at the same path creates
    a new split workspace while reusing the old job batch and teacher workbook.
@@ -386,9 +411,8 @@ completed for this feature during the current work session.
   workbook commits. `grading/skills/sol-grader/SKILL.md` replaced the older
   calibration prompt as the active instruction source; each prepared job keeps
   a frozen snapshot.
-- New desktop tasks use `Results/` beside the selected essay material. The old
-  `output/<batch>/` layout is retained for historical compatibility, not moved
-  or silently migrated.
+- Desktop tasks use `Results/<scan name>-<hash>/` beside the selected scan. The
+  old `output/<batch>/` teacher layout is no longer read.
 - The old normal UI accepted a prepared split-PDF folder. The current
   uncommitted direction makes the normal journey accept a continuous scan PDF
   and roster instead; split-pile selectors remain in developer/import mode.
@@ -420,14 +444,13 @@ completed for this feature during the current work session.
 
 ## 8. Known bugs, gotchas, and fragile areas
 
-- Fix the unbound `exc` bug in workbook inspection first.
+- (Fixed) the unbound `exc` bug in workbook inspection.
 - `workflow/storage.py` uses an atomic temp-file + `os.replace()` strategy. On
   Windows, open handles, antivirus, or concurrent tests can produce
   `PermissionError`; do not weaken atomicity without a replacement recovery
   design.
-- A real `VALIDATED` checkpoint without a valid persisted result is not done
-  work. A saved persistence receipt is diagnostic evidence, not an authoritative
-  workbook commit.
+- Only the workbook row plus audit row is done. Real marking writes no
+  checkpoints or receipts that survive an attempt.
 - A stale/active `.pipeline.lock` must not be deleted based on age alone; verify
   the owner process. App-owned scan workspaces are hash-keyed and invalid or
   partial workspaces must be surfaced, not reused blindly.

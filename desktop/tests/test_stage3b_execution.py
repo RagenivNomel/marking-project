@@ -22,6 +22,7 @@ if DESKTOP_DEPS.is_dir():
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
 
 from application import Action, AssignmentSource, WorkflowController
+from application.workflows.task_storage import task_output_paths
 from desktop.projection import project
 from desktop.teacher_flow import derive_teacher_flow
 from desktop.bridge import DesktopBridge
@@ -265,8 +266,10 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         batch_id = self.controller.workflow.marking_batch_id(self.source)
         fresh_source = self.controller.bind_source(self.source)
         self.assertIsNone(fresh_source.workbook)
-        self.assertEqual(fresh_source.results_directory, self.pile / "Results")
-        self.assertEqual(fresh_source.feedback_cards_directory, self.pile / "Results" / "Feedback Cards")
+        task_paths = task_output_paths(self.source)
+        self.assertEqual(task_paths.results_directory.parent, self.pile.resolve() / "Results")
+        self.assertEqual(fresh_source.results_directory, task_paths.results_directory)
+        self.assertEqual(fresh_source.feedback_cards_directory, task_paths.feedback_cards_directory)
         self.assertFalse(fresh_source.results_directory.exists())
         fresh = self.controller.inspect(fresh_source)
         fresh_flow = derive_teacher_flow(project(fresh, fresh_source, language="en"), "en")
@@ -283,7 +286,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         self.assertEqual(len(self.transport.calls), 2)
         workbook = outcome["source"].workbook
         self.assertTrue(workbook.is_file())
-        self.assertEqual(workbook, self.pile / "Results" / "results.xlsx")
+        self.assertEqual(workbook, task_paths.workbook)
         self.assertEqual(list(self.root.rglob("results.xlsx")), [workbook])
         self.assertFalse((self.root / "output" / batch_id / "results.xlsx").exists())
         complete = self.controller.inspect(self.source)
@@ -362,7 +365,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             batch = self.controller.workflow.marking_batch_id(self.source)
             self.assertFalse((self.root / "output" / batch / "results.xlsx").exists())
 
-            expected = self.pile / "Results" / "results.xlsx"
+            expected = task_output_paths(self.source).workbook
             stale = replace(self.source, workbook=expected, job_roots=(self.root / "jobs" / batch,))
             rebound = self.controller.bind_source(stale)
             self.assertIsNone(rebound.workbook)
@@ -701,7 +704,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         target_identity = Identity.from_dict(self.identities[1])
         target_key = job_key(target_identity)
         batch_id = self.controller.workflow.marking_batch_id(self.source)
-        workbook = self.pile / "Results" / "results.xlsx"
+        workbook = task_output_paths(self.source).workbook
         target_job = (
             self.root / "jobs" / batch_id / target_key
         )

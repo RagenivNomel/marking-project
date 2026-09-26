@@ -1,7 +1,7 @@
 """Transient bilingual presentation of Stage 1 models; no new assessment authority."""
 from application.models import Inspection, AssignmentSource
 from desktop.teacher_flow import derive_teacher_flow
-from application.workflows.task_storage import teacher_output_paths
+from application.workflows.task_storage import task_output_paths
 
 SECTIONS = {
     'zh': ('作文准备', 'AI批改', '教师审核', '反馈输出'),
@@ -86,8 +86,10 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
         elif source.results_directory is not None:
             results_workbook = source.results_directory / "results.xlsx"
         elif source.split_pile is not None:
-            task_root = source.continuous_scan.parent if source.continuous_scan else source.split_pile
-            results_workbook = teacher_output_paths(task_root).workbook
+            try:
+                results_workbook = task_output_paths(source).workbook
+            except (OSError, ValueError):
+                results_workbook = None
         feedback_cards_dir = source.feedback_cards_directory
         if feedback_cards_dir is None and results_workbook is not None:
             feedback_cards_dir = results_workbook.parent / "Feedback Cards"

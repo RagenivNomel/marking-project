@@ -75,19 +75,19 @@ are confirmed and the selected task has no blocking issue.
 ## Stage 3B: real marking
 
 Marking runs in a Qt worker thread. It uses the production `run_real_batch` /
-`run_real_pdf` / `CalibrationPipeline` path, one fresh isolated Luna xhigh model
-context per student. Results are validated and written to the assignment's
-single results workbook as `PENDING`, one student at a time. Each task uses a
-stable app-owned batch folder under `jobs/`; new tasks write the authoritative
-workbook to `<essay-folder>/Results/results.xlsx`. Reopening the same essay
-folder rediscovers that workbook automatically. Historical tasks with only
-`output/<batch>/results.xlsx` continue to use that workbook without moving it.
+`CalibrationPipeline` path, one fresh isolated Luna xhigh model context per
+student. Results are validated and written to the assignment's single results
+workbook as `PENDING`, one student at a time. Each task is identified by its
+scan's content hash and owns `jobs/<task>/` plus
+`<scan folder>/Results/<scan name>-<hash>/results.xlsx`; reopening the same
+scan rediscovers that workbook automatically.
 
-Start/Continue marking processes only essays without an authoritative workbook
-result row and matching audit record. Committed rows, including `APPROVED` rows
-and teacher-edited wording, are left unchanged. Raw, parsed, validated, and
-interrupted attempt artifacts are diagnostic only; there is no separate Retry
-operation, and an unfinished essay receives a fresh isolated model attempt.
+Start/Continue marking processes only essays without a valid workbook result
+row and matching audit row. Committed rows, including `APPROVED` rows and
+teacher-edited wording, are left unchanged. Any other essay is not done: its
+working files are discarded and it gets a fresh isolated model attempt. There
+is no partial resume and no separate Retry operation. If every essay in a run
+fails, the task shows "Marking could not start" with the first error.
 Successful essays stay saved when a later essay fails.
 While marking runs, **Cancel Marking** stops the queue from starting more essays.
 The essays already in progress finish and save before the batch stops; essays not
