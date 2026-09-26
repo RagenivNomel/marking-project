@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from application.models import Action, Inspection
+from application.models import Action, Inspection, DISPOSABLE_ATTENTION_CODES
 
 
 STAGE_KEYS = ("preparation", "marking", "review", "feedback")
@@ -40,6 +40,16 @@ def _number(value: Any, default: int = 0) -> int:
     except (TypeError, ValueError):
         return default
     return max(0, value)
+
+
+def _committed_results(summary: Mapping[str, Any]) -> int:
+    """Return authoritative DONE rows, with compatibility fallbacks."""
+
+    if "committed_results" in summary:
+        return _number(summary.get("committed_results"))
+    if "workbook_valid" in summary:
+        return _number(summary.get("workbook_valid"))
+    return _number(summary.get("grading_results_available"))
 
 
 def _action_name(value: Any) -> str:
@@ -72,8 +82,18 @@ def _inspection_view(inspection: Inspection) -> dict[str, Any]:
         {"details": f"{item.code}\n{item.technical_details}", "message": item.message}
         for item in inspection.attention
     ]
+    for submission in inspection.submissions:
+        for item in submission.attention:
+            if item.code in DISPOSABLE_ATTENTION_CODES:
+                continue
+            attention.append({
+                "details": f"{item.code}\n{item.technical_details}",
+                "message": item.message,
+            })
     rows = [
-        {"tone": "attention" if item.attention else "", "status": item.review_status or ""}
+        {"tone": "attention" if any(
+            a.code not in DISPOSABLE_ATTENTION_CODES for a in item.attention
+        ) else "", "status": item.review_status or ""}
         for item in inspection.submissions
     ]
     actions = [
@@ -128,7 +148,16 @@ def _attention_items(state: Mapping[str, Any]) -> list[Any]:
     # this fallback for small hand-built projections and future adapters.
     if not items:
         items = [row for row in state.get("rows", ()) if isinstance(row, Mapping) and row.get("tone") == "attention"]
-    return items
+    filtered = []
+    for item in items:
+        if not isinstance(item, Mapping):
+            filtered.append(item)
+            continue
+        details = str(item.get("details") or "")
+        code = details.splitlines()[0].strip() if details else ""
+        if code not in DISPOSABLE_ATTENTION_CODES:
+            filtered.append(item)
+    return filtered
 
 
 def _attention_codes(items: list[Any]) -> set[str]:
@@ -230,11 +259,11 @@ def _labels(language: str, action: str | None, step: str, count: int, total: int
         return (("Start marking", f"{total} essays are ready to be marked")
                 if en else ("开始批改", f"{total}份作文已准备好，可以开始批改"))
     if step == "marking_start_failed":
-        return (("Try again", "Only essays without saved results will be marked")
-                if en else ("重试批改", "只会批改尚无保存结果的作文"))
+        return (("Continue marking", "Only unfinished essays will be processed")
+                if en else ("继续批改", "只会处理尚未完成的作文"))
     if step == "resume_marking":
         saved = max(0, total - count)
-        return (("Resume marking", f"{saved} saved · {count} essay{'s' if count != 1 else ''} remain")
+        return (("Continue marking", f"{saved} saved · {count} essay{'s' if count != 1 else ''} remain")
                 if en else ("继续批改", f"{saved}份已保存 · 还有{count}份作文待批改"))
     if step == "marking":
         return (("Marking in progress", "The saved demo progress is shown for inspection; no live queue is connected")
@@ -253,8 +282,8 @@ def _labels(language: str, action: str | None, step: str, count: int, total: int
                 if en else (f"生成{count}张作文体检卡", f"{count}份作文已审核，可以生成体检卡"))
     if step == "partial_failure":
         if action == Action.RUN_MARKING.value:
-            return (("Retry failed essay", "Only the essay with a confirmed safe retry will be sent again")
-                    if en else ("重试未完成的作文", "只会重新提交已确认可以安全重试的作文"))
+            return (("Continue marking", "Only unfinished essays will be processed")
+                    if en else ("继续批改", "只会处理尚未完成的作文"))
         return (("Review task details", f"{count} item{'s' if count != 1 else ''} need attention")
                 if en else ("查看任务详情", f"还有{count}份需要处理"))
     if step == "complete":
@@ -291,7 +320,7 @@ def _choose_action(step: str, count: int, state: Mapping[str, Any], advice: Mapp
     if step == "generate":
         return Action.RENDER_APPROVED.value
     if step == "partial_failure":
-        if _number((state.get("summary") or {}).get("retryable_failures")) > 0:
+        if _number((state.get("summary") or {}).get("marking_available")) > 0:
             return Action.RUN_MARKING.value
         return Action.RESOLVE_ATTENTION.value
     if step == "complete":
@@ -319,8 +348,9 @@ def derive_teacher_flow(
     ready = _number(summary.get("ready_to_render"))
     confirmed = _number(summary.get("identity_confirmed"))
     unconfirmed = _number(summary.get("unconfirmed"), max(0, total - confirmed))
-    graded = _number(summary.get("grading_results_available"), awaiting + approved)
-    workbook_valid = _number(summary.get("workbook_valid"), awaiting + approved)
+    committed = _committed_results(summary)
+    graded = committed
+    workbook_valid = _number(summary.get("workbook_valid"), committed)
     review_complete = total > 0 and graded == total and workbook_valid == total
     marking_available = _number(summary.get("marking_available"))
     attention_items = _attention_items(view)
@@ -335,7 +365,6 @@ def derive_teacher_flow(
          if (view.get("progress") or {}).get("running") is True else 0),
     )
     advice = _action_advice(view)
-    retryable = _number(summary.get("retryable_failures"))
     attention_codes = _attention_codes(attention_items)
 
     if total == 0 and not attention_items:
@@ -351,17 +380,11 @@ def derive_teacher_flow(
         stage_index = 3
         tone = "attention"
     elif unconfirmed > 0:
-        # Recovery must not outrun the identity gate.  A retry action can be
-        # advertised only after every selected submission is confirmed; this
-        # prevents a visible button from dispatching an operation that the
-        # backend must reject for missing identity decisions.
+        # Marking must not outrun the identity gate. The action is advertised
+        # only after every selected submission is confirmed.
         step = "resolve_identity"
         stage_index = 0
         tone = "pending"
-    elif retryable > 0:
-        step = "partial_failure"
-        stage_index = 1
-        tone = "attention"
     elif (attention_codes == {"MARKING_STARTUP_FAILED"}
           and unconfirmed == 0 and marking_available > 0):
         step = "marking_start_failed"
@@ -375,7 +398,7 @@ def derive_teacher_flow(
         step = "marking"
         stage_index = 1
         tone = "active"
-    elif marking_available > 0 and _number(summary.get("grading_results_available")) > 0:
+    elif marking_available > 0 and committed > 0:
         step = "resume_marking"
         stage_index = 1
         tone = "active"
@@ -451,10 +474,10 @@ def derive_teacher_flow(
         headline = ("Marking submissions" if language == "en" else "正在批改作文")
     elif step == "marking_start_failed":
         headline = ("Marking could not start" if language == "en" else "批改未能开始")
-        detail = (("Your essays are still ready. Saved results remain safe. Check the details or try again.")
-                  if language == "en" else "作文仍已准备好，已保存的结果也会保留。请查看详情或重试。")
+        detail = (("Your essays are still ready. Saved results remain safe. Check the details or continue.")
+                  if language == "en" else "作文仍已准备好，已保存的结果也会保留。请查看详情后继续。")
     elif step == "resume_marking":
-        saved = _number(summary.get("grading_results_available"))
+        saved = committed
         remaining = max(0, total - saved)
         headline = (f"{saved} of {total} saved · {remaining} still to mark" if language == "en"
                     else f"已保存{saved}/{total}份 · 还有{remaining}份待批改")
@@ -466,15 +489,8 @@ def derive_teacher_flow(
         headline = (f"{action_count} feedback card{'s' if action_count != 1 else ''} can be generated"
                     if language == "en" else f"{action_count}份作文可以生成体检卡")
     elif step == "partial_failure":
-        if retryable:
-            marked = _number(summary.get("grading_results_available"))
-            headline = (f"{marked} / {total} essays saved · {retryable} needs a retry"
-                        if language == "en" else f"{marked} / {total}份作文已保存 · {retryable}份可以重试")
-            detail = ("Successful results remain saved. Retry will only send the eligible unfinished essay."
-                      if language == "en" else "已成功的结果仍然保留；重试只会提交可安全重试的未完成作文。")
-        else:
-            headline = (f"{rendered} / {total} generated successfully"
-                        if language == "en" else f"{rendered} / {total} 已成功生成")
+        headline = (f"{rendered} / {total} generated successfully"
+                    if language == "en" else f"{rendered} / {total} 已成功生成")
     else:
         headline = "All complete ✓" if language == "en" else "全部完成 ✓"
 
@@ -496,12 +512,11 @@ def derive_teacher_flow(
             Action.RUN_MARKING.value, Action.RENDER_APPROVED.value
         ) and action_enabled),
         attention_count=attention,
-        completed_count=(_number(summary.get("grading_results_available"))
-                         if retryable or step in ("marking", "resume_marking", "marking_start_failed") else rendered),
+        completed_count=(committed
+                         if step in ("marking", "resume_marking", "marking_start_failed") else rendered),
         total_count=total,
         stage_progress=tuple(statuses),
     ).to_dict()
-    result["retryOnly"] = step == "partial_failure" and action == Action.RUN_MARKING.value
     if action == Action.VIEW_OUTPUTS.value:
         result["actionReason"] = (
             "The feedback-card folder is not available yet."

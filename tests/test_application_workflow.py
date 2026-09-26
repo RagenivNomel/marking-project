@@ -728,7 +728,7 @@ class ApplicationWorkflowTests(unittest.TestCase):
         self.assertTrue(refreshed.submissions)
         self.assertEqual(before, after)
 
-    def test_uncertain_attempt_never_offers_run_marking(self):
+    def test_interrupted_attempt_remains_ordinary_not_done_work(self):
         identity = self._identity("041", "不确定学生")
         split, roster, decisions, source_pdf = self._write_split_source(identity)
         self._write_checkpoint(identity, source_pdf)
@@ -744,14 +744,32 @@ class ApplicationWorkflowTests(unittest.TestCase):
         self.assertEqual(len(inspection.submissions), 1)
         state = inspection.submissions[0]
         self.assertTrue(state.identity_confirmed)
-        self.assertNotIn(
+        self.assertIn(
             Action.RUN_MARKING,
             {item.action for item in inspection.available_actions},
         )
-        self.assertIn("uncertain", self._attention_text(inspection, state))
-        self.assertIn("attempt", self._attention_text(inspection, state))
+        self.assertEqual(inspection.summary["marking_available"], 1)
+        self.assertEqual(inspection.summary["blocking_errors"], 0)
+        self.assertNotIn("uncertain_attempt", self._attention_text(inspection, state))
 
-    def test_uncertain_graded_attempt_never_offers_run_marking(self):
+    def test_malformed_abandoned_bridge_does_not_block_ordinary_marking(self):
+        identity = self._identity("046", "桥接资料学生")
+        split, roster, decisions, source_pdf = self._write_split_source(identity)
+        job_dir = self._write_checkpoint(identity, source_pdf, state="TRANSCRIBED", attempts=1)
+        (job_dir / "real_grading_bridge.json").write_text("{", encoding="utf-8")
+        inspection = self._read_only_controller_call(
+            "inspect",
+            self._source(
+                job_roots=(self.jobs,), split_pile=split,
+                roster=roster, identity_decisions=decisions,
+            ),
+        )
+        state = self._submission(inspection, "fixture-attempt")
+        self.assertIn(Action.RUN_MARKING, state.next_actions)
+        self.assertEqual(inspection.summary["marking_available"], 1)
+        self.assertEqual(inspection.summary["blocking_errors"], 0)
+
+    def test_graded_attempt_without_workbook_commit_remains_not_done(self):
         identity = self._identity("047", "不确定已评分学生")
         split, roster, decisions, source_pdf = self._write_split_source(identity)
         self._write_checkpoint(
@@ -770,14 +788,15 @@ class ApplicationWorkflowTests(unittest.TestCase):
                 identity_decisions=decisions,
             ),
         )
-        self.assertNotIn(
+        self.assertIn(
             Action.RUN_MARKING,
             {item.action for item in inspection.available_actions},
         )
-        self.assertIn("uncertain", self._attention_text(inspection))
-        self.assertIn("attempt", self._attention_text(inspection))
+        self.assertEqual(inspection.summary["marking_available"], 1)
+        self.assertEqual(inspection.summary["blocking_errors"], 0)
+        self.assertNotIn("uncertain_attempt", self._attention_text(inspection))
 
-    def test_failed_model_attempt_is_one_recoverable_teacher_issue(self):
+    def test_failed_model_attempt_is_ordinary_not_done_work(self):
         identity = self._identity("054", "模型失败学生")
         split, roster, decisions, source_pdf = self._write_split_source(identity)
         parent = self._write_checkpoint(
@@ -821,14 +840,12 @@ class ApplicationWorkflowTests(unittest.TestCase):
             "inspect", self._source(job_roots=(self.jobs,))
         )
         state = self._submission(inspection, "recoverable-parent")
-        self.assertTrue(state.retryable)
-        self.assertEqual([item.code for item in state.attention], ["MARKING_RETRY_AVAILABLE"])
-        self.assertEqual(inspection.summary["retryable_failures"], 1)
-        self.assertEqual(inspection.summary["submissions_needing_attention"], 1)
+        self.assertEqual(inspection.summary["marking_available"], 1)
+        self.assertEqual(inspection.summary["submissions_needing_attention"], 0)
         self.assertEqual(inspection.summary["blocking_errors"], 0)
         self.assertIn(Action.RUN_MARKING, {item.action for item in inspection.available_actions})
 
-    def test_interrupted_calibration_checkpoint_is_recoverable(self):
+    def test_interrupted_calibration_checkpoint_is_ordinary_not_done_work(self):
         identity = self._identity("055", "中断学生")
         split, roster, decisions, source_pdf = self._write_split_source(identity)
         parent = self._write_checkpoint(
@@ -857,8 +874,9 @@ class ApplicationWorkflowTests(unittest.TestCase):
             "inspect", self._source(job_roots=(self.jobs,))
         )
         state = self._submission(inspection, "interrupted-parent")
-        self.assertTrue(state.retryable)
-        self.assertEqual([item.code for item in state.attention], ["MARKING_RETRY_AVAILABLE"])
+        self.assertEqual(inspection.summary["marking_available"], 1)
+        self.assertEqual(inspection.summary["submissions_needing_attention"], 0)
+        self.assertEqual(inspection.summary["blocking_errors"], 0)
 
     def test_fresh_confirmed_source_offers_only_safe_unwired_run(self):
         identity = self._identity("042", "新鲜学生")

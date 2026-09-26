@@ -45,7 +45,7 @@ Item {
                 var action = String((workspaceBody.appState.teacherFlow || {}).primaryAction || "")
                 if (action === "REVIEW_EXCEL") bridge.openResults()
                 else if (action === "VIEW_OUTPUTS") bridge.openFeedbackCards()
-                else if (action === "RUN_MARKING") bridge.startMarking(false)
+                else if (action === "RUN_MARKING") bridge.startMarking()
                 else if (action === "RENDER_APPROVED") bridge.generateFeedback()
                 else if (action === "REFRESH_REVIEW_STATUS") workspaceBody.refreshRequested()
             }

@@ -43,9 +43,9 @@ it must not silently treat a relocated copy as the original approved source.
 - Each submission has its own source/audit identity; a student may appear twice.
 - Excel is authoritative for current feedback and saved approval. Checkpoint
   approval fields do not override it.
-- `grading_available` means validated feedback is readable, including from the
-  authoritative workbook. It does not claim that every historical model response
-  was found. Supplied job roots let the adapter inspect historical artifacts too.
+- `grading_available` means a validated attempt artifact is readable. It is
+  diagnostic evidence only; `grading_results_available` and the saved/done
+  counts are derived from the matching workbook result and audit rows.
 - `rendered` means a matching, current approved-source receipt and output were
   verified. It is not inferred from a filename or checkpoint alone.
 - `ready_to_render` describes source-data/provenance eligibility, not a guarantee
@@ -73,11 +73,11 @@ it. Jobs and checkpoints remain under the app's internal `jobs/<batch>/` tree.
 An existing workbook at the historical `output/<batch>/results.xlsx` remains in
 place and is reused when no new-layout workbook exists. If both workbook paths
 exist, inspection blocks the task rather than choosing between two editable
-files. Validated checkpoints and their audited Excel rows count as completed;
-approved rows are preserved. A model-call failure is retryable only when its linked
-calibration checkpoint records exactly one attempted request, an explicit
-`MODEL_CALL_FAILED` report, and no raw response. The production one-retry guard
-is reused. Ambiguous or post-response failures remain blocked.
+files. Only a matching workbook result row and audit row count as completed;
+approved rows are preserved. Raw, parsed, validated, interrupted, and
+persistence-receipt artifacts remain diagnostic evidence and do not block
+ordinary marking. A new model attempt is isolated from any unfinished prior
+attempt.
 
 ## Stage 3C approved-row rendering
 

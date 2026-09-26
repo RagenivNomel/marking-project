@@ -1,5 +1,7 @@
 """Atomic checkpoints and a conservative single-writer lock per batch."""
 from contextlib import contextmanager
+import ctypes
+import ctypes.wintypes
 from pathlib import Path
 import json
 import os
@@ -39,6 +41,19 @@ def lock_owner_is_alive(path):
     except (OSError, ValueError):
         return True
     if owner <= 0:
+        return True
+    if os.name == "nt":
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+        handle = kernel32.OpenProcess(0x1000, False, owner)
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        if ctypes.get_last_error() in (87, 1168):
+            return False
         return True
     try:
         os.kill(owner, 0)

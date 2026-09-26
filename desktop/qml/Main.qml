@@ -196,7 +196,7 @@ ApplicationWindow {
             onInspectRequested: inspectDialog.open()
             onRefreshRequested: bridge.refresh()
             onConfirmIdentitiesRequested: bridge.confirmIdentitySelections(selections)
-            onMarkingRequested: function(retryOnly) { bridge.startMarking(retryOnly) }
+            onMarkingRequested: bridge.startMarking()
             onCancelMarkingRequested: bridge.cancelMarking()
             onFeedbackRequested: bridge.generateFeedback()
             onBackRequested: bridge.navigate("home")

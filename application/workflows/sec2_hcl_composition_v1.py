@@ -53,112 +53,6 @@ def _hash(path):
     return sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _retryable_model_call_failure(directory, checkpoint):
-    """Recognize a failed model call with no durable response artifact.
-
-    A prior calibration job may have consumed its bounded attempts without
-    producing a response.  That is still recoverable, but recovery must start
-    a new calibration-attempt lineage rather than silently reusing the old
-    one.  The pipeline decides whether the new attempt can reuse the existing
-    child or needs a fresh child namespace.
-    """
-    if (checkpoint.get("state") != "TRANSCRIBED"
-            or (Path(directory) / "raw_model_response.json").exists()):
-        return False
-    try:
-        report = read_json(Path(directory) / "validation_report.json")
-    except (OSError, ValueError, TypeError):
-        return False
-    return report.get("status") == "MODEL_CALL_FAILED" and report.get("model_request_attempted") is True
-
-
-def _retryable_interrupted_model_call(directory, checkpoint):
-    """Recognize a child checkpoint interrupted after its first-call reservation."""
-    if (checkpoint.get("state") != "TRANSCRIBED"
-            or checkpoint.get("live_request_attempts") != 1):
-        return False
-    path = Path(directory)
-    if any((path / name).exists()
-           for name in ("raw_model_response.json", "parsed_result.json")):
-        return False
-    report_path = path / "validation_report.json"
-    if not report_path.exists():
-        return True
-    try:
-        report = read_json(report_path)
-    except (OSError, ValueError, TypeError):
-        return False
-    return report.get("status") == "MODEL_CALL_FAILED" and report.get("model_request_attempted") is True
-
-
-def _retryable_interrupted_bridge(directory, checkpoint, child):
-    """Recognize a parent interrupted before its calibration child was durable."""
-    if checkpoint.get("state") != "TRANSCRIBED":
-        return False
-    if any((Path(directory) / name).exists()
-           for name in ("grading_result.json", "validated_result.json", "raw_model_response.json")):
-        return False
-    bridge_path = Path(directory) / "real_grading_bridge.json"
-    if not bridge_path.is_file() or Path(child).exists():
-        return False
-    try:
-        bridge = read_json(bridge_path)
-    except (OSError, ValueError, TypeError):
-        return False
-    return bridge.get("status") == "IN_PROGRESS"
-
-
-def _mark_recovery_available(entry, details):
-    """Collapse internal failure evidence to one actionable essay issue."""
-    entry.retryable = True
-    entry.safe_mark = False
-    entry.attention = [a for a in entry.attention
-                       if a.code not in ("UNCERTAIN_ATTEMPT", "SAVED_FAILURE",
-                                         "BRIDGE_EVIDENCE_MISSING")]
-    if not any(a.code == "MARKING_RETRY_AVAILABLE" for a in entry.attention):
-        entry.attention.append(Attention(
-            "MARKING_RETRY_AVAILABLE", "warning",
-            "The previous attempt did not finish. You can retry this essay.",
-            details, entry.key,
-        ))
-
-
-def _safe_to_start_first_attempt(directory, checkpoint):
-    if (checkpoint.get("state") != "TRANSCRIBED"
-            or checkpoint.get("live_request_attempts") != 0
-            or (Path(directory) / "raw_model_response.json").exists()):
-        return False
-    report_path = Path(directory) / "validation_report.json"
-    if not report_path.exists():
-        return True
-    try:
-        report = read_json(report_path)
-    except (OSError, ValueError, TypeError):
-        return False
-    return report.get("model_request_attempted") is False and report.get("status") == "PREFLIGHT_BLOCKED"
-
-
-def _retryable_workbook_persistence(directory, checkpoint):
-    """Recognize only this job's explicit unfinished workbook-write evidence."""
-    if checkpoint.get("state") != "VALIDATED":
-        return False
-    try:
-        marker = read_json(Path(directory) / "workbook_persistence.json")
-        expected_workbook = _path(checkpoint.get("workbook"))
-        return (
-            marker.get("schema_version") == 1
-            and marker.get("job_id") == checkpoint.get("job_id")
-            and marker.get("identity") == checkpoint.get("identity")
-            and marker.get("input_digest") == checkpoint.get("input_digest")
-            and isinstance(marker.get("input_digest"), str)
-            and bool(marker.get("input_digest"))
-            and _path(marker.get("workbook")) == expected_workbook
-            and marker.get("status") in ("PENDING", "FAILED")
-        )
-    except (OSError, ValueError, TypeError, AttributeError):
-        return False
-
-
 @dataclass
 class _Entry:
     """Transient workflow-specific evidence; never serialized as source of truth."""
@@ -170,8 +64,6 @@ class _Entry:
     audit: dict | None = None
     state: str | None = None
     rendered: bool = False
-    safe_mark: bool = False
-    retryable: bool = False
     evidence: list = field(default_factory=list)
     attention: list = field(default_factory=list)
     source_paths: set = field(default_factory=set)
@@ -254,7 +146,7 @@ class CompositionWorkflow:
         requested = _path(source.workbook) if source.workbook is not None else None
         attached_workbook = requested
         if requested is None and source.job_roots:
-            # Explicit recovery roots remain an import workflow. Do not mix
+            # Explicit attached roots remain an import workflow. Do not mix
             # them with this project's automatically managed task workbook.
             attached_workbook = None
         elif requested is None or requested in workbook_candidates:
@@ -314,7 +206,7 @@ class CompositionWorkflow:
             return self._finish({}, [Attention("CONFIG_INVALID", "error", "批改配置暂时无法读取。", str(exc))], False)
         workbook = _path(source.workbook) if source.workbook is not None else None
         before = None
-        if workbook is not None:
+        if workbook is not None and workbook.is_file():
             try:
                 before = _hash(workbook)
                 self._workbook(workbook, validator, entries, issues)
@@ -334,7 +226,7 @@ class CompositionWorkflow:
                     entry.record = None
                     entry.rendered = False
         # Suppress actions when assignment-wide evidence is incomplete or ambiguous.
-        return self._finish(entries, issues, workbook is not None)
+        return self._finish(entries, issues, workbook is not None and workbook.is_file())
 
     @staticmethod
     def _workbook(path, validator, entries, issues):
@@ -387,7 +279,7 @@ class CompositionWorkflow:
                         metadata = dict(job_id=job, excel_row=number, input_digest=audit[4].value, pipeline_status=audit[5].value)
                     entry.record, entry.audit = record, metadata
                     entry.confirmed = entry.grading = True
-                except Exception as exc:
+                except Exception:
                     entry.issue("WORKBOOK_ROW_INVALID", "这份作文的审核数据需要检查，原文没有被修改。", exc)
         finally:
             book.close()
@@ -420,7 +312,6 @@ class CompositionWorkflow:
                 entry.issue("CHECKPOINT_INVALID", "这份作文的保存记录无法读取。", exc)
         # A calibration job is evidence for its exact production parent, not another essay.
         children = {}
-        missing_children = {}
         for directory in list(jobs):
             bridge = directory / "real_grading_bridge.json"
             if bridge.is_file():
@@ -428,7 +319,8 @@ class CompositionWorkflow:
                     data = read_json(bridge)
                     child = _path(data["calibration_job"], directory)
                     if not (child / "student_record.json").is_file():
-                        missing_children[directory] = child
+                        # An interrupted child is disposable attempt evidence.
+                        continue
                     elif child not in jobs:
                         # The production calibration checkpoint lives beside the
                         # batch folder. Follow only the exact path recorded in
@@ -441,10 +333,12 @@ class CompositionWorkflow:
                         if child in children:
                             raise ValueError("Calibration job has multiple production parents")
                         children[child] = directory
-                except Exception as exc:
-                    issues.append(Attention("BRIDGE_INVALID", "error", "批改记录的来源关联需要检查。", f"{bridge}: {exc}"))
+                except Exception:
+                    # A malformed or stale bridge is disposable attempt
+                    # evidence. Only a readable child with a real identity,
+                    # source, workbook, or audit conflict is actionable.
+                    continue
         seen = set()
-        startup_failures = []
         for directory, checkpoint in jobs.items():
             if directory in children:
                 continue
@@ -455,19 +349,9 @@ class CompositionWorkflow:
             entry.evidence.append(str(directory / "student_record.json"))
             if key in seen:
                 entry.issue("DUPLICATE_JOB", "多份保存记录使用了同一作文标识，需要核对。", key)
-                entry.safe_mark = False
                 continue
             seen.add(key)
             self._job(directory, checkpoint, entry, workbook, validator)
-            if directory in missing_children:
-                missing_child = missing_children[directory]
-                if _retryable_interrupted_bridge(directory, checkpoint, missing_child):
-                    _mark_recovery_available(
-                        entry,
-                        f"The marking run stopped before a durable calibration checkpoint was saved: {missing_child}",
-                    )
-                else:
-                    entry.issue("BRIDGE_EVIDENCE_MISSING", "部分批改来源记录缺失，需要核对。", str(missing_child))
             for child, parent in children.items():
                 if parent == directory:
                     child_cp = jobs[child]
@@ -476,49 +360,15 @@ class CompositionWorkflow:
                         entry.issue("BRIDGE_IDENTITY_MISMATCH", "批改来源的学生信息不一致。", str(child))
                     if checkpoint.get("source_sha256") != child_cp.get("source_sha256"):
                         entry.issue("BRIDGE_SOURCE_MISMATCH", "批改来源的作文内容标识不一致。", str(child))
-                    if entry.state not in _VALIDATED and (
-                            _retryable_model_call_failure(child, child_cp)
-                            or _retryable_interrupted_model_call(child, child_cp)):
-                        _mark_recovery_available(
-                            entry,
-                            f"No raw model response was saved in the calibration record: {child}",
-                        )
-                    elif entry.state not in _VALIDATED and _safe_to_start_first_attempt(child, child_cp):
-                        entry.attention = [a for a in entry.attention
-                                           if a.code not in ("UNCERTAIN_ATTEMPT", "SAVED_FAILURE")]
-                        entry.safe_mark = (entry.confirmed and not entry.grading
-                                           and not any(a.severity == "error" for a in entry.attention))
-                        report_path = child / "validation_report.json"
-                        if report_path.is_file():
-                            report = read_json(report_path)
-                            if report.get("status") == "PREFLIGHT_BLOCKED":
-                                startup_failures.append((child, report.get("error")))
-                    elif entry.state not in _VALIDATED and (child_cp.get("live_request_attempts", 0) or child_cp.get("state") == "GRADED"):
-                        entry.issue("UNCERTAIN_ATTEMPT", "这份作文已有批改尝试，请先检查记录，不要直接重试。", str(child))
-                        entry.safe_mark = False
-        if startup_failures:
-            child, error = startup_failures[0]
-            issues.append(Attention(
-                "MARKING_STARTUP_FAILED", "warning",
-                "批改未能开始，作文仍已准备好。请查看详情或重试。",
-                f"{len(startup_failures)} pre-model startup failure(s); first report: "
-                f"{child / 'validation_report.json'}; error: {error}",
-            ))
+                    # Calibration child state, model-attempt counters, and
+                    # validation reports are transient attempt evidence. They
+                    # never block ordinary processing of a NOT-DONE essay.
         for root in source.job_roots:
             lock = _path(root) / ".pipeline.lock"
             if lock_is_active(lock):
                 issues.append(Attention("BATCH_LOCKED", "error", "任务可能仍在运行，请先检查，不要直接重试。", str(lock)))
-        orphan_dirs = set()
-        for filename in ("validated_result.json", "parsed_result.json", "grading_result.json", "raw_model_response.json", "source.pdf"):
-            for artifact in self._find(source.job_roots, filename, issues):
-                if artifact.parent in jobs:
-                    continue
-                key = artifact.parent.name if artifact.parent.name in entries else f"job:{artifact.parent}"
-                entry = entries.setdefault(key, _Entry(key))
-                entry.evidence.append(str(artifact))
-                if artifact.parent not in orphan_dirs:
-                    entry.issue("CHECKPOINT_MISSING", "已找到作文或批改资料，但缺少可核对的任务记录。", str(artifact.parent))
-                    orphan_dirs.add(artifact.parent)
+        # Orphan raw/parsed/validated/model artifacts are disposable attempt
+        # evidence. They do not create a submission or block ordinary marking.
 
     @staticmethod
     def _job(directory, checkpoint, entry, workbook, validator):
@@ -566,33 +416,15 @@ class CompositionWorkflow:
                     validator.validate(value, identity)
                     found_valid = True
                 except Exception as exc:
-                    entry.issue("GRADING_ARTIFACT_INVALID", "保存的批改结果需要检查。", f"{artifact}: {exc}")
+                    entry.issue("GRADING_ARTIFACT_INVALID", "保存的批改结果需要检查。", f"{artifact}: {exc}", severity="warning")
             entry.grading = entry.grading or found_valid
             if state in _VALIDATED and not found_valid:
-                entry.issue("GRADING_ARTIFACT_MISSING", "记录显示批改已完成，但保存的批改结果缺失。", str(directory))
-            if state in _VALIDATED and entry.record is None:
-                if (state == "VALIDATED" and found_valid
-                        and _retryable_workbook_persistence(directory, checkpoint)):
-                    entry.retryable = True
-                    entry.issue(
-                        "WORKBOOK_PERSISTENCE_RETRY_AVAILABLE",
-                        "A validated result is ready to be saved. Retry will save it without grading the essay again.",
-                        str(directory / "workbook_persistence.json"), severity="warning",
-                    )
-                else:
-                    entry.issue("WORKBOOK_RESULT_MISSING", "批改结果已保存，但尚未找到有效的审核工作簿行。", str(directory))
-            attempts = checkpoint.get("live_request_attempts", 0)
-            if type(attempts) is not int or attempts < 0:
-                raise ValueError("Invalid live_request_attempts counter")
-            if state not in _VALIDATED and (attempts or state == "GRADED" or (directory / "raw_model_response.json").exists()):
-                entry.issue("UNCERTAIN_ATTEMPT", "这份作文的批改尝试需要核对，请勿直接重新批改。", f"state={state}; attempts={attempts}; uncertain saved attempt")
-            if checkpoint.get("last_error"):
-                entry.issue("SAVED_FAILURE", "这份作文上次处理未完成，请查看原因。", checkpoint["last_error"])
-            entry.safe_mark = (entry.confirmed and not entry.grading and state in {"IDENTIFIED", "TRANSCRIBED"}
-                               and pdf.is_file() and not entry.attention and attempts == 0)
+                entry.issue("GRADING_ARTIFACT_MISSING", "之前的批改资料不完整，将按未完成作文重新处理。", str(directory), severity="warning")
+            # Persistence receipts and checkpoint errors describe an attempt,
+            # not the authoritative result.  A missing workbook row remains
+            # ordinary NOT-DONE work and is selected again after confirmation.
         except Exception as exc:
             entry.issue("CHECKPOINT_INCONSISTENT", "这份作文的保存记录与现有资料不一致。", exc)
-            entry.safe_mark = False
 
     @staticmethod
     def _intake(source, entries, issues):
@@ -643,10 +475,10 @@ class CompositionWorkflow:
                         if same_student:
                             entry.issue("SUBMISSION_LINK_REQUIRED", "已有同一学生的结果，请先核对是否为同一份作文。", str(pdf))
                         else:
-                            entry.safe_mark = True
+                            pass
                 else:
                     entry.identity = identity
-                    entry.confirmed = entry.safe_mark = False
+                    entry.confirmed = False
                     entry.issue("IDENTITY_UNRESOLVED", "请确认这份作文对应的学生。", str(pdf), "warning")
             elif not entry.confirmed:
                 entry.issue("IDENTITY_UNRESOLVED", "请确认这份作文对应的学生。", str(pdf), "warning")
@@ -722,9 +554,7 @@ class CompositionWorkflow:
             actions = []
             if not entry.confirmed:
                 actions.append(Action.CONFIRM_SUBMISSIONS)
-            if entry.safe_mark and not blocked:
-                actions.append(Action.RUN_MARKING)
-            elif entry.retryable and not blocked:
+            if entry.confirmed and entry.record is None and not blocked:
                 actions.append(Action.RUN_MARKING)
             if review == "PENDING":
                 actions.append(Action.REVIEW_EXCEL)
@@ -746,7 +576,6 @@ class CompositionWorkflow:
                 workbook_valid=entry.record is not None, review_status=review,
                 rendered=entry.rendered, ready_to_render=ready, checkpoint_state=entry.state,
                 evidence=tuple(dict.fromkeys(entry.evidence)), attention=tuple(entry.attention), next_actions=tuple(actions),
-                retryable=entry.retryable,
             ))
         if has_workbook:
             targets[Action.REFRESH_REVIEW_STATUS] = [e.key for e in entries.values() if e.record is not None]
@@ -985,7 +814,7 @@ class CompositionWorkflow:
             "failed": failures,
         }, "source": source}
 
-    def execute_marking(self, source: AssignmentSource, *, progress_callback=None, retry_only=False,
+    def execute_marking(self, source: AssignmentSource, *, progress_callback=None,
                         cancelled=None):
         """Run the existing one-student production batch behind the app seam."""
         from grading.schemas import ValidationError
@@ -1024,30 +853,17 @@ class CompositionWorkflow:
         if any(len(items) != 1 for items in by_student.values()):
             raise ValidationError("Each student must be linked to only one submission before marking")
 
-        retry_keys = set()
-        if retry_only:
-            retryable = [item for item in inspection.submissions if item.retryable]
-            if not retryable:
-                raise ValidationError("There is no submission with a safely retryable marking attempt")
-            retry_keys = {item.submission_id for item in retryable}
-            records = [record for record in records
-                       if any(item.submission_id in retry_keys
-                              for item in by_student.get((record["class_name"], record["student_id"]), []))]
-        else:
-            eligible = []
-            for record in records:
-                items = by_student.get((record["class_name"], record["student_id"]), [])
-                if not items:
-                    raise ValidationError("A confirmed submission is missing from the inspected task")
-                item = items[0]
-                if item.retryable:
-                    # Normal Start never consumes a second model attempt.
-                    continue
-                if item.workbook_valid and item.review_status in ("PENDING", "APPROVED"):
-                    eligible.append(record)
-                elif Action.RUN_MARKING in item.next_actions:
-                    eligible.append(record)
-            records = eligible
+        eligible = []
+        for record in records:
+            items = by_student.get((record["class_name"], record["student_id"]), [])
+            if not items:
+                raise ValidationError("A confirmed submission is missing from the inspected task")
+            item = items[0]
+            # A valid workbook row is DONE. Everything else is ordinary
+            # unfinished work, including interrupted/validated attempts.
+            if not item.workbook_valid and Action.RUN_MARKING in item.next_actions:
+                eligible.append(record)
+        records = eligible
 
         if self.pipeline_factory is None:
             from workflow.pipeline import Pipeline
@@ -1066,7 +882,6 @@ class CompositionWorkflow:
             essay_question=None,
             model_profile=MARKING_PROFILE,
             progress_callback=progress_callback,
-            retry_student_ids=retry_keys,
             cancelled=cancelled,
         )
         # Bind the completed inspection to files that actually exist. A missing

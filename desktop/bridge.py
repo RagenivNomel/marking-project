@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import threading
 import time
+import traceback
 from PySide6.QtCore import QObject, Property, QRunnable, QThreadPool, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
 from application import AssignmentSource, WorkflowController
@@ -17,6 +18,20 @@ from desktop.identity_confirmation import (
 )
 from desktop.projection import project, set_section
 from desktop.teacher_flow import derive_teacher_flow
+
+
+def _committed_results(summary):
+    """Count only authoritative workbook commits as saved progress."""
+    if not isinstance(summary, dict):
+        return 0
+    for key in ("committed_results", "workbook_valid", "grading_results_available"):
+        value = summary.get(key)
+        if value is not None:
+            try:
+                return max(0, int(value))
+            except (TypeError, ValueError):
+                return 0
+    return 0
 
 class ReadSignals(QObject):
     finished = Signal(object, object, str)
@@ -41,9 +56,9 @@ class MarkingSignals(QObject):
 
 class MarkingTask(QRunnable):
     """Run the existing production batch away from the Qt GUI thread."""
-    def __init__(self, controller, source, retry_only=False):
+    def __init__(self, controller, source):
         super().__init__()
-        self.controller, self.source, self.retry_only = controller, source, retry_only
+        self.controller, self.source = controller, source
         self.stop_event = threading.Event()
         self.signals = MarkingSignals()
 
@@ -56,13 +71,13 @@ class MarkingTask(QRunnable):
             outcome = self.controller.execute(
                 Action.RUN_MARKING, self.source,
                 progress_callback=self.signals.progress.emit,
-                retry_only=self.retry_only,
                 cancelled=self.stop_event.is_set,
             )
             source = outcome["source"]
             inspection = self.controller.inspect(source)
             self.signals.finished.emit(inspection, source, outcome.get("result", {}), "")
         except Exception as exc:
+            traceback.print_exc()
             try:
                 inspection = self.controller.inspect(self.source)
             except Exception:
@@ -345,8 +360,8 @@ class DesktopBridge(QObject):
         self.changed.emit()
         self.inspect_source(source, refresh=True)
 
-    @Slot(bool)
-    def startMarking(self, retryOnly=False):
+    @Slot()
+    def startMarking(self):
         if (self._busy or self._source is None or self._state.get("demo")
                 or not self._state.get("teacherFlow", {}).get("primaryActionEnabled")
                 or self._state.get("teacherFlow", {}).get("primaryAction") != Action.RUN_MARKING.value):
@@ -356,11 +371,14 @@ class DesktopBridge(QObject):
         self.busyChanged.emit()
         self._marking_started = time.monotonic()
         summary = (self._inspection.summary if self._inspection is not None else {})
+        committed = _committed_results(summary)
         self._state["progress"] = {
             "total": summary.get("submissions", 0),
-            "completed": summary.get("grading_results_available", 0),
+            "completed": committed,
             "active": 0,
-            "waiting": summary.get("submissions", 0) - summary.get("grading_results_available", 0),
+            "waiting": summary.get("submissions", 0) - committed,
+            "finishing": 0,
+            "remaining_not_started": max(0, summary.get("submissions", 0) - committed),
             "attention": 0,
             "current": "",
             "elapsed": "0:00",
@@ -371,7 +389,7 @@ class DesktopBridge(QObject):
         self._state["notice"] = ("Marking has started. Each essay is handled separately." if self._language == "en"
                                   else "已开始批改；每份作文会分别处理。")
         self.changed.emit()
-        task = MarkingTask(self._controller, self._source, bool(retryOnly))
+        task = MarkingTask(self._controller, self._source)
         task.signals.progress.connect(self._marking_progress)
         task.signals.finished.connect(self._marking_finished)
         self._task = task
@@ -384,14 +402,19 @@ class DesktopBridge(QObject):
             return
         self._cancel_requested = True
         self._task.request_stop()
+        current_progress = self._state.get("progress", {})
+        active = max(0, int(current_progress.get("active", 0) or 0))
+        remaining = max(0, int(current_progress.get("remaining_not_started", 0) or 0))
         self._state["progress"] = {
-            **self._state.get("progress", {}),
+            **current_progress,
             "cancelRequested": True,
-            "saved": ("Stopping after the current essays finish. Saved results will be kept."
-                      if self._language == "en" else "当前作文完成后停止；已保存的结果会保留。"),
+            "finishing": active,
+            "remaining_not_started": remaining,
+            "saved": ("Finishing current essays before stopping. Essays not started will remain."
+                      if self._language == "en" else "先完成当前作文再停止；尚未开始的作文会保留。"),
         }
-        self._state["notice"] = ("Stopping marking after the current essays finish."
-                                  if self._language == "en" else "当前作文完成后停止批改。")
+        self._state["notice"] = ("Finishing current essays before stopping."
+                                  if self._language == "en" else "先完成当前作文再停止批改。")
         self.changed.emit()
 
     @Slot(object)
@@ -403,11 +426,11 @@ class DesktopBridge(QObject):
         state["cancelRequested"] = self._cancel_requested
         elapsed = max(0, int(time.monotonic() - (self._marking_started or time.monotonic())))
         state["elapsed"] = f"{elapsed // 60}:{elapsed % 60:02d}"
-        state["saved"] = (("Stopping after the current essays finish. Saved results will be kept."
-                           if self._language == "en" else "当前作文完成后停止；已保存的结果会保留。")
+        state["saved"] = (("Finishing current essays before stopping. Essays not started will remain."
+                           if self._language == "en" else "先完成当前作文再停止；尚未开始的作文会保留。")
                           if self._cancel_requested else
-                          (f"{state.get('completed', 0)} validated result(s) are saved." if self._language == "en"
-                           else f"{state.get('completed', 0)}份已验证结果已保存。"))
+                          (f"{state.get('completed', 0)} committed result(s) are saved." if self._language == "en"
+                           else f"{state.get('completed', 0)}份已提交结果已保存。"))
         self._state["progress"] = state
         self._state["teacherFlow"] = derive_teacher_flow(self._state, self._language)
         self.changed.emit()
@@ -427,48 +450,51 @@ class DesktopBridge(QObject):
             self._state["markingResult"] = result
             self._state["reducedMotion"] = reduced
             summary = inspection.summary
-            saved = summary["grading_results_available"]
-            attention = max(summary["retryable_failures"], summary["submissions_needing_attention"])
+            saved = _committed_results(summary)
+            attention = summary["submissions_needing_attention"]
+            remaining_not_started = max(0, int(result.get("remaining_not_started", 0) or 0))
             self._state["progress"] = {
                 "total": summary["submissions"],
                 "completed": saved,
                 "active": 0,
-                "waiting": max(0, summary["submissions"] - saved - attention),
+                "waiting": remaining_not_started,
+                "finishing": 0,
+                "remaining_not_started": remaining_not_started,
                 "attention": attention,
                 "current": "",
                 "elapsed": elapsed,
                 "running": False,
-                "saved": (f"{saved} validated result(s) are saved." if self._language == "en"
-                          else f"已保存{saved}份已验证结果。"),
+                "saved": (f"{saved} committed result(s) are saved." if self._language == "en"
+                          else f"已保存{saved}份已提交结果。"),
             }
             if error and not self._state["attention"] and summary["marking_available"] > 0:
                 self._state["attention"].append(dict(
                     title="This assignment" if self._language == "en" else "这次任务",
-                    message=("Marking could not start. Your essays are still ready. Check the details or try again."
-                             if self._language == "en" else "批改未能开始，作文仍已准备好。请查看详情或重试。"),
+                    message=("Marking could not start. Your essays are still ready; check the details before continuing."
+                             if self._language == "en" else "批改未能开始，作文仍已准备好；请查看详情后继续。"),
                     details=f"MARKING_STARTUP_FAILED\n{error}",
                 ))
             self._state["teacherFlow"] = derive_teacher_flow(self._state, self._language)
             step = self._state["teacherFlow"]["step"]
             if error and step == "marking_start_failed":
-                self._state["notice"] = ("Marking could not start. Your essays are still ready; check the details or try again." if self._language == "en"
-                                          else "批改未能开始；作文仍已准备好。请查看详情或重试。")
-                self._state["executionError"] = "The marking run did not start. Check the details before trying again." if self._language == "en" else "批改未能开始，请查看详情后重试。"
+                self._state["notice"] = ("Marking could not start. Your essays are still ready; check the details before continuing." if self._language == "en"
+                                          else "批改未能开始；作文仍已准备好。请查看详情后继续。")
+                self._state["executionError"] = "The marking run did not start. Check the details before continuing." if self._language == "en" else "批改未能开始，请查看详情后继续。"
             elif error:
                 self._state["notice"] = ("Marking stopped before the batch finished. Read the task again to continue safely." if self._language == "en"
                                           else "批改未能完成。请重新读取任务后安全地继续。")
                 self._state["executionError"] = "The marking run did not finish. Check the selected task before continuing." if self._language == "en" else "批改未能完成，请先检查任务再继续。"
             elif failures and step == "marking_start_failed":
-                self._state["notice"] = ("Marking could not start. Your essays are still ready; check the details or try again." if self._language == "en"
-                                          else "批改未能开始；作文仍已准备好。请查看详情或重试。")
+                self._state["notice"] = ("Marking could not start. Your essays are still ready; check the details before continuing." if self._language == "en"
+                                          else "批改未能开始；作文仍已准备好。请查看详情后继续。")
             elif failures:
-                self._state["notice"] = ((f"{failures} essay(s) could not be marked. {saved} validated result(s) remain saved." if saved else
+                self._state["notice"] = ((f"{failures} essay(s) could not be marked. {saved} committed result(s) remain saved." if saved else
                                            f"{failures} essay(s) could not be marked. Check the task details before continuing.") if self._language == "en"
-                                          else (f"有{failures}份作文未完成批改；已保存{saved}份已验证结果。" if saved else
+                                          else (f"有{failures}份作文未完成批改；已保存{saved}份已提交结果。" if saved else
                                                 f"有{failures}份作文未完成批改；请先检查任务详情。"))
             elif result.get("interrupted"):
-                self._state["notice"] = ("Marking paused. Saved results will be kept when you resume." if self._language == "en"
-                                          else "批改已暂停；继续时会保留已保存结果。")
+                self._state["notice"] = ("Marking paused. Essays not started will remain for Continue marking." if self._language == "en"
+                                          else "批改已暂停；尚未开始的作文会保留，继续批改即可处理。")
             elif step == "review":
                 self._state["notice"] = ("Teacher review is ready. The results workbook is saved." if self._language == "en"
                                           else "教师审核已就绪，批改结果工作簿已保存。")

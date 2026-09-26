@@ -26,7 +26,7 @@ class WorkflowController:
         """Re-read saved evidence; does not save, approve, repair, or cache it."""
         return self.inspect(source)
 
-    def execute(self, action, source: AssignmentSource, *, progress_callback=None, retry_only=False,
+    def execute(self, action, source: AssignmentSource, *, progress_callback=None,
                 cancelled=None):
         from .models import Action
         try:
@@ -35,7 +35,7 @@ class WorkflowController:
             raise NotImplementedError("Only the supported Stage 3B/3C actions are executable.") from None
         if action == Action.RUN_MARKING:
             return self.workflow.execute_marking(
-                source, progress_callback=progress_callback, retry_only=retry_only,
+                source, progress_callback=progress_callback,
                 cancelled=cancelled,
             )
         if action == Action.RENDER_APPROVED:

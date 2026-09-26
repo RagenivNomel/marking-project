@@ -81,15 +81,15 @@ workbook to `<essay-folder>/Results/results.xlsx`. Reopening the same essay
 folder rediscovers that workbook automatically. Historical tasks with only
 `output/<batch>/results.xlsx` continue to use that workbook without moving it.
 
-Start resumes only unfinished work. Saved validated results are not sent to the
-model again, and existing `APPROVED` rows and teacher-edited wording are left
-unchanged. An explicit Retry action is offered only when the calibration
-checkpoint proves that its one model attempt failed before a response was saved;
-the existing single retry limit still applies. Other uncertain attempts remain
-blocked for inspection. Successful essays stay saved when a later essay fails.
+Start/Continue marking processes only essays without an authoritative workbook
+result row and matching audit record. Committed rows, including `APPROVED` rows
+and teacher-edited wording, are left unchanged. Raw, parsed, validated, and
+interrupted attempt artifacts are diagnostic only; there is no separate Retry
+operation, and an unfinished essay receives a fresh isolated model attempt.
+Successful essays stay saved when a later essay fails.
 While marking runs, **Cancel Marking** stops the queue from starting more essays.
-The essays already in progress finish and save before the batch stops; the UI
-shows **Stopping…** during that interval. Reopening the task retains saved work.
+The essays already in progress finish and save before the batch stops; essays not
+started remain for Continue marking. Reopening the task retains saved work.
 The workspace ends at **Teacher review is ready**. It does not open Excel or
 approve rows. After the teacher saves an `APPROVED` row in Excel and rereads it,
 Stage 3C can generate a feedback card from that exact saved row.
@@ -124,7 +124,7 @@ re-inspects those persisted artifacts.
 
 The normal **选择作文** dialog accepts a submission folder and class roster.
 Results are discovered automatically. Workbook and evidence selectors remain
-available in the developer recovery/import workflow. Explicit existing
+available in the developer import workflow. Explicit existing
 locations can also be supplied at launch:
 
 ```powershell

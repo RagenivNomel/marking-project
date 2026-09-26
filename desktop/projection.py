@@ -1,5 +1,5 @@
 """Transient bilingual presentation of Stage 1 models; no new assessment authority."""
-from application.models import Inspection, AssignmentSource
+from application.models import Inspection, AssignmentSource, DISPOSABLE_ATTENTION_CODES
 from desktop.teacher_flow import derive_teacher_flow
 from application.workflows.task_storage import teacher_output_paths
 
@@ -28,7 +28,10 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
                                  if s.class_name and s.student_id})
     summary['identity_confirmed'] = sum(s.identity_confirmed for s in inspection.submissions)
     for index, item in enumerate(inspection.submissions, 1):
-        if item.attention:
+        actionable_attention = tuple(
+            a for a in item.attention if a.code not in DISPOSABLE_ATTENTION_CODES
+        )
+        if actionable_attention:
             status, tone = ('△ Needs attention' if en else '△ 需要处理'), 'attention'
         elif item.workbook_valid and item.review_status == 'PENDING':
             status, tone = ('○ Awaiting review' if en else '○ 待审核'), 'pending'
@@ -36,7 +39,7 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
             status, tone = ('✓ Generated' if en else '✓ 已生成'), 'complete'
         elif item.workbook_valid and item.review_status == 'APPROVED':
             status, tone = ('✓ Approved' if en else '✓ 已审核'), 'complete'
-        elif item.grading_available:
+        elif item.workbook_valid:
             status, tone = ('✓ Results available' if en else '✓ 结果可读取'), 'complete'
         elif not item.identity_confirmed:
             status, tone = ('○ Check identity' if en else '○ 待核对身份'), 'neutral'
@@ -44,7 +47,7 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
             status, tone = ('○ No result yet' if en else '○ 尚无结果'), 'neutral'
         identity = ' · '.join(v for v in (item.class_name, item.student_id, item.student_name) if v) or ('Identity to check' if en else '身份待核对')
         facets = []
-        if item.grading_available:
+        if item.workbook_valid:
             facets.append('Marking result available' if en else '批改结果可读取')
         if item.workbook_valid and item.review_status in ('PENDING', 'APPROVED'):
             facets.append(('Awaiting teacher review' if item.review_status == 'PENDING' else 'Approved') if en else ('待教师审核' if item.review_status == 'PENDING' else '已审核'))
@@ -63,17 +66,8 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
         rows.append(dict(id=item.submission_id, ordinal=f'{index:03}', identity=identity,
                          label=essay, status=status, tone=tone, details=technical,
                          facets=facets))
-        for a in item.attention:
+        for a in actionable_attention:
             message = a.message
-            if a.code == 'MARKING_RETRY_AVAILABLE':
-                message = ('The previous attempt did not finish. Retry is available for this essay.' if en
-                           else '上一次批改未完成，可以安全重试这份作文。')
-            elif en and a.code == 'UNCERTAIN_ATTEMPT':
-                message = 'This essay has an incomplete marking attempt that cannot be safely retried automatically.'
-            elif en and a.code == 'SAVED_FAILURE':
-                message = 'The previous marking attempt did not finish. Its saved work is still available for inspection.'
-            elif en and a.code == 'BRIDGE_EVIDENCE_MISSING':
-                message = 'Some saved marking evidence is missing. This essay is paused until the records can be checked.'
             attention.append(dict(title=f'{identity} · {essay}', message=message,
                                   details=f'{a.code}\n{a.technical_details}'))
     task_title = 'This assignment' if en else '这次任务'

@@ -28,8 +28,8 @@ from desktop.bridge import DesktopBridge
 from grading.sol_grader import CredentialUnavailable, SolGrader
 from tests.test_real_batch_integration import RecordingTransport
 from workflow.calibration_pipeline import CalibrationPipeline
-from workflow.pipeline import Pipeline, job_key
-from excel.schema import AUDIT_SHEET, SHEET
+from workflow.pipeline import Pipeline, fingerprint, job_key
+from excel.schema import AUDIT_HEADERS, AUDIT_SHEET, HEADERS, SHEET
 from excel.workbook import ExcelStore
 
 
@@ -171,6 +171,83 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         self.grader_instances.append(grader)
         return grader
 
+    def _add_interrupted_retry_jobs(self, workbook, count=3):
+        batch_id = self.controller.workflow.marking_batch_id(self.source)
+        batch_dir = self.root / "jobs" / batch_id
+        paths = []
+        job_ids = []
+        for index in range(count):
+            identity = Identity(
+                student_id=f"9{index + 1}",
+                student_name=f"Retry Fixture {index + 1}",
+                class_name="207",
+            )
+            key = job_key(identity)
+            source_digest = f"{index + 1:064x}"
+            parent = batch_dir / key
+            child = self.root / "jobs" / f"calibration_{batch_id}_{key}"
+            parent.mkdir(parents=True)
+            child.mkdir(parents=True)
+            checkpoint = {
+                "schema_version": 2,
+                "mode": "REAL_PDF_BATCH",
+                "job_id": key,
+                "identity": identity.to_dict(),
+                "input_digest": f"{index + 11:064x}",
+                "source_sha256": source_digest,
+                "source_page_count": 1,
+                "model_profile": "luna_xhigh",
+                "execution_namespace": batch_id,
+                "workbook": str(workbook),
+                "state": "TRANSCRIBED",
+                "history": ["NEW", "SCANNED", "IDENTIFIED", "TRANSCRIBED"],
+                "last_error": None,
+            }
+            child_checkpoint = {
+                **checkpoint,
+                "mode": "CALIBRATION",
+                "job_id": child.name,
+                "live_request_attempts": 1,
+            }
+            (parent / "student_record.json").write_text(
+                json.dumps(checkpoint, ensure_ascii=False), encoding="utf-8"
+            )
+            (child / "student_record.json").write_text(
+                json.dumps(child_checkpoint, ensure_ascii=False), encoding="utf-8"
+            )
+            (parent / "real_grading_bridge.json").write_text(
+                json.dumps({
+                    "calibration_job": str(child),
+                    "execution_namespace": batch_id,
+                    "calibration_attempt_namespace": batch_id,
+                    "status": "IN_PROGRESS",
+                }),
+                encoding="utf-8",
+            )
+            (parent / "real_grading_attempts.json").write_text(
+                json.dumps({"schema_version": 1, "attempts": [{"status": "INTERRUPTED"}]}),
+                encoding="utf-8",
+            )
+            paths.extend((parent, child))
+            job_ids.append(key)
+        return tuple(job_ids), tuple(paths)
+
+    @staticmethod
+    def _delete_workbook_result(workbook, job_id):
+        editable = load_workbook(workbook)
+        try:
+            audit = editable[AUDIT_SHEET]
+            audit_row = next(
+                row[0].row for row in audit.iter_rows(min_row=2)
+                if row[0].value == job_id
+            )
+            result_row = audit.cell(audit_row, 4).value
+            editable[SHEET].delete_rows(result_row, 1)
+            audit.delete_rows(audit_row, 1)
+            editable.save(workbook)
+        finally:
+            editable.close()
+
     def test_unconfirmed_assignments_cannot_start_marking(self):
         source = AssignmentSource(
             split_pile=self.pile,
@@ -254,7 +331,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         self.assertFalse((self.pile / "Results").exists())
         self.assertEqual(legacy_workbook.read_bytes(), before)
 
-    def test_preflight_blocked_jobs_remain_visible_and_safe_to_retry(self):
+    def test_preflight_blocked_jobs_remain_visible_and_unfinished(self):
         app = QCoreApplication.instance() or QCoreApplication([])
 
         class UnavailableTransport:
@@ -275,7 +352,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         bridge._inspection = before
         bridge._state = project(before, self.source, language="en")
         try:
-            bridge.startMarking(False)
+            bridge.startMarking()
             deadline = time.monotonic() + 5
             while bridge.busy and time.monotonic() < deadline:
                 app.processEvents(QEventLoop.AllEvents, 20)
@@ -289,7 +366,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             self.assertEqual(state["summary"]["blocking_errors"], 0)
             self.assertEqual(state["teacherFlow"]["step"], "marking_start_failed")
             self.assertEqual(state["teacherFlow"]["headline"], "Marking could not start")
-            self.assertEqual(state["teacherFlow"]["primaryActionLabel"], "Try again")
+            self.assertEqual(state["teacherFlow"]["primaryActionLabel"], "Continue marking")
             self.assertTrue(state["teacherFlow"]["primaryActionEnabled"])
             self.assertIn("Your essays are still ready", state["notice"])
             self.assertNotIn("Teacher review is ready", state["notice"])
@@ -347,7 +424,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         bridge._inspection = before
         bridge._state = project(before, self.source, language="en")
         try:
-            bridge.startMarking(False)
+            bridge.startMarking()
             deadline = time.monotonic() + 5
             while bridge.busy and time.monotonic() < deadline:
                 app.processEvents(QEventLoop.AllEvents, 20)
@@ -355,7 +432,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             app.processEvents(QEventLoop.AllEvents, 20)
             state = bridge.state
             self.assertEqual(state["teacherFlow"]["step"], "marking_start_failed")
-            self.assertEqual(state["teacherFlow"]["primaryActionLabel"], "Try again")
+            self.assertEqual(state["teacherFlow"]["primaryActionLabel"], "Continue marking")
             self.assertTrue(state["teacherFlow"]["primaryActionEnabled"])
             self.assertEqual(state["summary"]["grading_results_available"], 0)
             self.assertEqual(state["attention"][0]["details"].splitlines()[0], "MARKING_STARTUP_FAILED")
@@ -401,11 +478,11 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         self.assertEqual(reopened.summary["grading_results_available"], 1)
         self.assertEqual(reopened.summary["awaiting_review"], 1)
         self.assertEqual(reopened.summary["blocking_errors"], 0)
-        self.assertEqual(reopened.summary["retryable_failures"], 0)
+        self.assertEqual(reopened.summary["marking_available"], 1)
         self.assertTrue(any(Action.RUN_MARKING in item.next_actions for item in reopened.submissions))
         resumed_flow = derive_teacher_flow(project(reopened, self.controller.bind_source(self.source), language="en"), "en")
         self.assertEqual(resumed_flow["step"], "resume_marking")
-        self.assertEqual(resumed_flow["primaryActionLabel"], "Resume marking")
+        self.assertEqual(resumed_flow["primaryActionLabel"], "Continue marking")
         self.assertTrue(resumed_flow["primaryActionEnabled"])
 
         with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
@@ -470,24 +547,23 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             checked.close()
         self.assertEqual(len(self.transport.calls), 2)
 
-    def test_only_explicitly_retryable_failure_is_retried(self):
+    def test_unfinished_attempt_is_included_by_the_single_continue_operation(self):
         self.transport = RecordingTransport([Identity.from_dict(item) for item in self.identities], failure_index=0)
         self.grader_instances.clear()
         partial = self.controller.execute(Action.RUN_MARKING, self.source)
         self.assertEqual(len(partial["result"]["failed"]), 1)
         self.assertEqual(len(partial["result"]["validated"]), 1)
         inspection = self.controller.inspect(self.source)
-        self.assertEqual(inspection.summary["retryable_failures"], 1)
-        failed = [item for item in inspection.submissions if item.retryable]
+        self.assertEqual(inspection.summary["marking_available"], 1)
+        failed = [item for item in inspection.submissions if item.student_id == "01"]
         self.assertEqual(len(failed), 1)
         state = project(inspection, self.controller.bind_source(self.source), language="en")
         flow = derive_teacher_flow(state, "en")
         self.assertEqual(flow["primaryAction"], Action.RUN_MARKING.value)
-        self.assertTrue(flow["retryOnly"])
-        self.assertEqual(flow["primaryActionLabel"], "Retry failed essay")
+        self.assertEqual(flow["primaryActionLabel"], "Continue marking")
 
         self.transport = RecordingTransport([Identity.from_dict(item) for item in self.identities])
-        retried = self.controller.execute(Action.RUN_MARKING, self.source, retry_only=True)
+        retried = self.controller.execute(Action.RUN_MARKING, self.source)
         self.assertFalse(retried["result"]["failed"])
         self.assertEqual(retried["result"]["selected"], 1)
         self.assertEqual(len(self.transport.calls), 1)
@@ -495,61 +571,273 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         self.assertIn(self.identities[0]["student_name"], retry_prompt)
         final = self.controller.inspect(self.source)
         self.assertEqual(final.summary["grading_results_available"], 2)
-        self.assertEqual(final.summary["retryable_failures"], 0)
+        self.assertEqual(final.summary["marking_available"], 0)
 
-    def test_post_response_failure_is_blocked_from_automatic_retry(self):
+    def test_post_response_failure_remains_ordinary_unfinished_work(self):
         self.transport = RecordingTransport(
             [Identity.from_dict(item) for item in self.identities], malformed_index=0
         )
         result = self.controller.execute(Action.RUN_MARKING, self.source)
         self.assertEqual(len(result["result"]["failed"]), 1)
         inspection = self.controller.inspect(self.source)
-        self.assertEqual(inspection.summary["retryable_failures"], 0)
-        self.assertGreater(inspection.summary["blocking_errors"], 0)
-        affected = [item for item in inspection.submissions if item.attention]
-        self.assertEqual(len(affected), 1)
-        self.assertFalse(affected[0].retryable)
+        self.assertEqual(inspection.summary["blocking_errors"], 0)
+        self.assertEqual(inspection.summary["marking_available"], 1)
         state = project(inspection, self.controller.bind_source(self.source), language="en")
-        teacher_messages = [item["message"] for item in state["attention"]]
-        self.assertTrue(any("cannot be safely retried" in message for message in teacher_messages))
-        with self.assertRaises(ValidationError):
-            self.controller.execute(Action.RUN_MARKING, self.source, retry_only=True)
+        self.transport = RecordingTransport(
+            [Identity.from_dict(item) for item in self.identities]
+        )
+        resumed = self.controller.execute(Action.RUN_MARKING, self.source)
+        self.assertEqual(resumed["result"]["selected"], 1)
+        self.assertEqual(len(self.transport.calls), 1)
+        self.assertEqual(self.controller.inspect(self.source).summary["marking_available"], 0)
 
-    def test_validated_workbook_write_failure_retries_without_grading_again(self):
+    def test_workbook_save_failure_keeps_essay_unfinished_for_ordinary_marking(self):
         original_save = ExcelStore._save
         failed_once = False
 
-        def fail_first_student_save(store, book):
+        def fail_second_student_save(store, book):
             nonlocal failed_once
             rows = list(book[SHEET].iter_rows(min_row=2, values_only=True))
-            if not failed_once and rows and rows[-1][1] == "01":
+            if not failed_once and rows and rows[-1][1] == "02":
                 failed_once = True
                 raise OSError("synthetic authoritative workbook write failure")
             return original_save(store, book)
 
-        with patch.object(ExcelStore, "_save", fail_first_student_save):
+        with patch.object(ExcelStore, "_save", fail_second_student_save):
             first = self.controller.execute(Action.RUN_MARKING, self.source)
         self.assertTrue(failed_once)
         self.assertEqual(len(first["result"]["failed"]), 1)
         self.assertEqual(len(self.transport.calls), 2)
 
-        inspection = self.controller.inspect(self.source)
-        failed_entry = next(item for item in inspection.submissions if item.student_id == "01")
-        self.assertTrue(failed_entry.retryable)
-        self.assertIn("WORKBOOK_PERSISTENCE_RETRY_AVAILABLE",
-                      {item.code for item in failed_entry.attention})
-        state = project(inspection, self.controller.bind_source(self.source), language="en")
-        flow = derive_teacher_flow(state, "en")
-        self.assertEqual(flow["primaryAction"], Action.RUN_MARKING.value)
-        self.assertTrue(flow["retryOnly"])
+        failed_identity = Identity.from_dict(self.identities[1])
+        failed_key = job_key(failed_identity)
+        failed_job = (
+            self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source)
+            / failed_key
+        )
+        marker = json.loads(
+            (failed_job / "workbook_persistence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(marker["status"], "FAILED")
 
-        retried = self.controller.execute(Action.RUN_MARKING, self.source, retry_only=True)
-        self.assertEqual(retried["result"]["selected"], 1)
-        self.assertEqual(retried["result"]["failed"], [])
-        self.assertEqual(len(self.transport.calls), 2)
+        inspection = self.controller.inspect(self.source)
+        failed_entry = next(item for item in inspection.submissions if item.student_id == "02")
+        self.assertTrue(any(Action.RUN_MARKING in item.next_actions for item in inspection.submissions))
+        self.assertEqual(inspection.summary["marking_available"], 1)
+        self.assertFalse(hasattr(failed_entry, "persistence_recoverable"))
+
+        self.transport = RecordingTransport([Identity.from_dict(item) for item in self.identities])
+        resumed = self.controller.execute(Action.RUN_MARKING, self.source)
+        self.assertEqual(resumed["result"]["selected"], 1)
+        self.assertEqual(len(self.transport.calls), 1)
         final = self.controller.inspect(self.source)
         self.assertEqual(final.summary["grading_results_available"], 2)
-        self.assertEqual(final.summary["retryable_failures"], 0)
+        self.assertEqual(final.summary["marking_available"], 0)
+
+    def test_validated_artifacts_without_authoritative_row_are_not_done(self):
+        with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
+            first = self.controller.execute(Action.RUN_MARKING, self.source)
+        workbook = first["source"].workbook
+        target_key = job_key(Identity.from_dict(self.identities[1]))
+        self._delete_workbook_result(workbook, target_key)
+        self.transport.calls.clear()
+
+        reopened = self.controller.inspect(self.source)
+        target = next(item for item in reopened.submissions if item.submission_id == target_key)
+        self.assertFalse(target.workbook_valid)
+        self.assertEqual(reopened.summary["grading_results_available"], 1)
+        self.assertEqual(reopened.summary["transient_grading_artifacts"], 1)
+        self.assertIn(Action.RUN_MARKING, target.next_actions)
+        self.assertEqual(reopened.summary["marking_available"], 1)
+        self.assertEqual(reopened.summary["blocking_errors"], 0)
+        flow = derive_teacher_flow(project(reopened, self.controller.bind_source(self.source), language="en"), "en")
+        self.assertEqual(flow["primaryAction"], Action.RUN_MARKING.value)
+        self.assertEqual(flow["primaryActionLabel"], "Continue marking")
+
+        self.transport = RecordingTransport([Identity.from_dict(item) for item in self.identities])
+        with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
+            resumed = self.controller.execute(Action.RUN_MARKING, self.source)
+        self.assertEqual(resumed["result"]["selected"], 1)
+        self.assertEqual(len(self.transport.calls), 1)
+        self.assertEqual(self.controller.inspect(self.source).summary["grading_results_available"], 2)
+
+    def test_persistence_receipt_does_not_define_done(self):
+        with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
+            first = self.controller.execute(Action.RUN_MARKING, self.source)
+        workbook = first["source"].workbook
+        target_key = job_key(Identity.from_dict(self.identities[1]))
+        target_job = (
+            self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source) / target_key
+        )
+        self._delete_workbook_result(workbook, target_key)
+        marker_path = target_job / "workbook_persistence.json"
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+
+        variants = [
+            {**marker, "status": "SAVED"},
+            {**marker, "status": "UNKNOWN"},
+            {**marker, "schema_version": 99},
+        ]
+        for variant in variants:
+            with self.subTest(marker=variant):
+                marker_path.write_text(json.dumps(variant), encoding="utf-8")
+                inspection = self.controller.inspect(self.source)
+                target = next(item for item in inspection.submissions if item.submission_id == target_key)
+                self.assertIn(Action.RUN_MARKING, target.next_actions)
+                self.assertEqual(inspection.summary["blocking_errors"], 0)
+
+        marker_path.write_text("{", encoding="utf-8")
+        malformed = self.controller.inspect(self.source)
+        target = next(item for item in malformed.submissions if item.submission_id == target_key)
+        self.assertIn(Action.RUN_MARKING, target.next_actions)
+        self.assertEqual(malformed.summary["blocking_errors"], 0)
+
+    def test_missing_or_invalid_validated_result_remains_not_done(self):
+        with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
+            first = self.controller.execute(Action.RUN_MARKING, self.source)
+        workbook = first["source"].workbook
+        target_key = job_key(Identity.from_dict(self.identities[1]))
+        target_job = (
+            self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source) / target_key
+        )
+        self._delete_workbook_result(workbook, target_key)
+        (target_job / "workbook_persistence.json").unlink()
+        validated_path = target_job / "validated_result.json"
+        validated_bytes = validated_path.read_bytes()
+        validated_path.unlink()
+
+        missing = self.controller.inspect(self.source)
+        missing_target = next(item for item in missing.submissions if item.submission_id == target_key)
+        self.assertIn(Action.RUN_MARKING, missing_target.next_actions)
+        self.assertEqual(missing.summary["blocking_errors"], 0)
+
+        validated_path.write_bytes(validated_bytes[:-2] + b"invalid\n")
+        invalid = self.controller.inspect(self.source)
+        invalid_target = next(item for item in invalid.submissions if item.submission_id == target_key)
+        self.assertIn(Action.RUN_MARKING, invalid_target.next_actions)
+        self.assertEqual(invalid.summary["blocking_errors"], 0)
+
+    def test_workbook_row_without_audit_blocks_duplicate_risk(self):
+        target_identity = Identity.from_dict(self.identities[1])
+        target_key = job_key(target_identity)
+        batch_id = self.controller.workflow.marking_batch_id(self.source)
+        workbook = self.pile / "Results" / "results.xlsx"
+        target_job = (
+            self.root / "jobs" / batch_id / target_key
+        )
+        target_job.mkdir(parents=True)
+        source_pdf = self.pile / "essay_002.pdf"
+        source_bytes = source_pdf.read_bytes()
+        import hashlib
+        source_digest = hashlib.sha256(source_bytes).hexdigest()
+        digest = fingerprint({
+            "identity": target_identity.to_dict(),
+            "source_sha256": source_digest,
+            "essay_question": None,
+            "model_profile": "luna_xhigh",
+        })
+        grading = _valid_response(target_identity.to_dict())["grading"]
+        (target_job / "source.pdf").write_bytes(source_bytes)
+        for name, value in {
+            "source.json": {
+                "mode": "real-pdf", "source_original_path": str(source_pdf),
+                "source_sha256": source_digest, "page_count": 1,
+            },
+            "identity.json": {"method": "explicit-batch-input", **target_identity.to_dict()},
+            "essay.json": {"method": "direct_pdf", "page_count": 1, "essay_question": None},
+            "grading_result.json": grading,
+            "validated_result.json": grading,
+            "student_record.json": {
+                "schema_version": 2, "mode": "REAL_PDF_BATCH", "job_id": target_key,
+                "identity": target_identity.to_dict(), "input_digest": digest,
+                "source_sha256": source_digest, "source_page_count": 1,
+                "model_profile": "luna_xhigh", "execution_namespace": batch_id,
+                "workbook": str(workbook), "state": "VALIDATED",
+                "history": ["NEW", "SCANNED", "IDENTIFIED", "TRANSCRIBED", "GRADED", "VALIDATED"],
+                "last_error": None,
+            },
+        }.items():
+            (target_job / name).write_text(
+                json.dumps(value, ensure_ascii=False), encoding="utf-8"
+            )
+
+        workbook.parent.mkdir(parents=True)
+        editable = Workbook()
+        sheet = editable.active
+        sheet.title = SHEET
+        sheet.append(HEADERS)
+        values = [target_identity.class_name, target_identity.student_id,
+                  target_identity.student_name, "", None, None, None]
+        for name in CRITERIA:
+            values.extend((grading["criteria"][name]["rating"],
+                           grading["criteria"][name]["short_comment"]))
+        values.extend((grading["teacher_comment"], "PENDING"))
+        sheet.append(values)
+        audit = editable.create_sheet(AUDIT_SHEET)
+        audit.append(AUDIT_HEADERS)
+        audit.sheet_state = "hidden"
+        editable.save(workbook)
+        editable.close()
+
+        reopened = self.controller.inspect(self.source)
+        target = next(item for item in reopened.submissions if item.submission_id == target_key)
+        self.assertNotIn(Action.RUN_MARKING, target.next_actions)
+        self.assertGreater(reopened.summary["blocking_errors"], 0)
+        self.assertIn("WORKBOOK_ROW_INVALID", {item.code for item in target.attention})
+
+    def test_pending_persistence_receipt_does_not_reopen_committed_result(self):
+        with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
+            first = self.controller.execute(Action.RUN_MARKING, self.source)
+        workbook = first["source"].workbook
+        identity = Identity.from_dict(self.identities[1])
+        key = job_key(identity)
+        marker_path = (
+            self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source)
+            / key / "workbook_persistence.json"
+        )
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker["status"] = "PENDING"
+        marker.pop("review_status", None)
+        marker_path.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")
+        workbook_before = workbook.read_bytes()
+        calls_before = len(self.transport.calls)
+
+        reopened = self.controller.inspect(self.source)
+        target = next(item for item in reopened.submissions if item.submission_id == key)
+        self.assertTrue(target.workbook_valid)
+        self.assertNotIn(Action.RUN_MARKING, target.next_actions)
+        self.assertEqual(len(self.transport.calls), calls_before)
+        self.assertEqual(workbook.read_bytes(), workbook_before)
+        saved_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved_marker["status"], "PENDING")
+        self.assertEqual(self.controller.inspect(self.source).summary["marking_available"], 0)
+
+    def test_committed_rows_are_excluded_from_direct_marking_selection(self):
+        with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
+            self.controller.execute(Action.RUN_MARKING, self.source)
+        target_key = job_key(Identity.from_dict(self.identities[1]))
+        marker_path = (
+            self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source)
+            / target_key / "workbook_persistence.json"
+        )
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker["status"] = "PENDING"
+        marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+        selected = []
+
+        def capture_run(pipeline, records, source_dir, **kwargs):
+            selected.extend(job_key(Identity.from_dict({
+                key: record[key] for key in ("class_name", "student_id", "student_name")
+            })) for record in records)
+            return {
+                "selected": len(records), "validated": [], "failed": [],
+                "already_complete": 0, "workbook": str(pipeline.excel.path),
+            }
+
+        with patch.object(Pipeline, "run_real_batch", capture_run):
+            self.controller.execute(Action.RUN_MARKING, self.source)
+        self.assertNotIn(target_key, selected)
 
     def test_desktop_runs_off_gui_thread_and_rejects_duplicate_clicks(self):
         app = QCoreApplication.instance() or QCoreApplication([])
@@ -578,8 +866,8 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         QTimer.singleShot(30, lambda: heartbeat.append("gui-responsive"))
         gui_thread = threading.get_ident()
 
-        bridge.startMarking(False)
-        bridge.startMarking(False)
+        bridge.startMarking()
+        bridge.startMarking()
         deadline = time.monotonic() + 5
         while bridge.busy and time.monotonic() < deadline:
             app.processEvents(QEventLoop.AllEvents, 20)
@@ -618,7 +906,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         bridge._inspection = inspection
         bridge._state = project(inspection, self.source, language="en")
         with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
-            bridge.startMarking(False)
+            bridge.startMarking()
             self.assertTrue(call_started.wait(4), "The first isolated grading call did not start")
             bridge.shutdown()
         app.processEvents(QEventLoop.AllEvents, 20)
@@ -630,6 +918,7 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             self.assertEqual(reopened.summary["marking_available"], 1)
             flow = derive_teacher_flow(project(reopened, self.controller.bind_source(self.source), language="en"), "en")
             self.assertEqual(flow["step"], "resume_marking")
+            self.assertEqual(flow["primaryActionLabel"], "Continue marking")
             self.assertEqual(flow["headline"], "1 of 2 saved · 1 still to mark")
         finally:
             bridge.shutdown()
@@ -659,12 +948,12 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         bridge._state = project(inspection, self.source, language="en")
         try:
             with patch("workflow.pipeline.MAX_CONCURRENT_GRADERS", 1):
-                bridge.startMarking(False)
+                bridge.startMarking()
                 self.assertTrue(call_started.wait(4), "The first isolated grading call did not start")
                 bridge.cancelMarking()
                 bridge.cancelMarking()
                 self.assertTrue(bridge.state["progress"]["cancelRequested"])
-                self.assertIn("Stopping", bridge.state["progress"]["saved"])
+                self.assertIn("Finishing", bridge.state["progress"]["saved"])
                 release_call.set()
                 deadline = time.monotonic() + 5
                 while bridge.busy and time.monotonic() < deadline:

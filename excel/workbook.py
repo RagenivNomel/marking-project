@@ -216,6 +216,19 @@ class ExcelStore:
                     raise ValidationError("Existing Excel row belongs to different input")
                 self._decode(existing, identity)
                 return
+            for row in sheet.iter_rows(min_row=2):
+                if not any(cell.value is not None for cell in row):
+                    continue
+                if (roster_text(row[0].value), roster_text(row[1].value)) == (
+                    identity.class_name, identity.student_id,
+                ):
+                    raise ValidationError("Existing Excel row for this student lacks matching audit evidence")
+            for audit in book[AUDIT_SHEET].iter_rows(min_row=2):
+                if not any(cell.value is not None for cell in audit):
+                    continue
+                if (roster_text(audit[1].value), roster_text(audit[2].value)) == (
+                        identity.class_name, identity.student_id):
+                    raise ValidationError("Existing Excel audit evidence conflicts with this result")
             values = [result.class_name, result.student_id, result.student_name, topic,
                       content_score, language_structure_score, total_score]
             for name in CRITERIA:

@@ -85,7 +85,7 @@ def build_identity_review(source: AssignmentSource, inspection: Inspection, lang
     # is the stable job key rather than ``submission:<source path>``. Preserve
     # the identity confirmation by joining on the already-persisted source-PDF
     # evidence as well, so a failed or resumable job does not reopen identity
-    # confirmation and hide its retry/resume action.
+    # confirmation without changing the unfinished-work action.
     confirmed_source_evidence = {
         evidence
         for item in inspection.submissions if item.identity_confirmed

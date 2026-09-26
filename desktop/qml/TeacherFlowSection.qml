@@ -12,7 +12,7 @@ Item {
     signal inspectRequested()
     signal refreshRequested()
     signal confirmIdentitiesRequested(var selections)
-    signal markingRequested(bool retryOnly)
+    signal markingRequested()
     signal cancelMarkingRequested()
     signal feedbackRequested()
     property var identityReview: teacherFlow.appState.identityReview || ({})
@@ -73,7 +73,7 @@ Item {
             reducedMotion: teacherFlow.reducedMotion
             onActionRequested: {
                 if (teacherFlow.flow.primaryAction === "REFRESH_REVIEW_STATUS") teacherFlow.refreshRequested()
-                else if (teacherFlow.flow.primaryAction === "RUN_MARKING") teacherFlow.markingRequested(Boolean(teacherFlow.flow.retryOnly))
+                else if (teacherFlow.flow.primaryAction === "RUN_MARKING") teacherFlow.markingRequested()
                 else if (teacherFlow.flow.primaryAction === "RENDER_APPROVED") teacherFlow.feedbackRequested()
                 else if (teacherFlow.flow.primaryAction === "REVIEW_EXCEL") bridge.openResults()
                 else if (teacherFlow.flow.primaryAction === "VIEW_OUTPUTS") bridge.openFeedbackCards()

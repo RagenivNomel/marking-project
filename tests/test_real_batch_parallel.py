@@ -339,7 +339,7 @@ class RealBatchParallelTests(unittest.TestCase):
         self.assertLessEqual(evidence["max_simultaneous_graders"], 3)
         self.assertEqual(evidence["max_simultaneous_workbook_writers"], 1)
 
-    def test_failure_isolation_retry_only_and_successful_students_are_not_regraded(self):
+    def test_failure_isolation_and_single_continue_operation(self):
         offline = OfflineCodexRunner(
             self.identities[:4],
             fail_once={self.identities[1].student_name},
@@ -364,7 +364,6 @@ class RealBatchParallelTests(unittest.TestCase):
         retry_pipeline = self.make_pipeline(offline)
         retry = retry_pipeline.run_real_batch(
             [self.records[1]], self.source_dir, model_profile="luna_xhigh",
-            retry_student_ids=(job_key(self.identities[1]),),
         )
         self.assertEqual(len(retry["validated"]), 1)
         self.assertEqual(retry["validated"][0]["identity"]["student_id"], "02")
@@ -398,12 +397,11 @@ class RealBatchParallelTests(unittest.TestCase):
 
         retry = self.make_pipeline(offline, "lineage-offline").run_real_batch(
             [self.records[1]], self.source_dir, model_profile="luna_xhigh",
-            retry_student_ids=(job_key(self.identities[1]),),
         )
         self.assertEqual(len(retry["validated"]), 1)
         self.assertTrue(old_calibration.is_dir())
         current_bridge = read_json(failed_job.parent / "real_grading_bridge.json")
-        self.assertIn("_retry_2_", Path(current_bridge["calibration_job"]).name)
+        self.assertIn("_attempt_2_", Path(current_bridge["calibration_job"]).name)
         self.assertNotEqual(Path(current_bridge["calibration_job"]), old_calibration)
         lineage = read_json(failed_job.parent / "real_grading_attempts.json")
         self.assertEqual([item["attempt"] for item in lineage["attempts"]], [1, 2])
@@ -411,7 +409,7 @@ class RealBatchParallelTests(unittest.TestCase):
         self.assertEqual(lineage["attempts"][1]["state"], "VALIDATED")
         self.assertEqual(len(offline.calls), 3)
 
-    def test_persistence_failure_keeps_workbook_readable_and_retry_does_not_regrade(self):
+    def test_persistence_failure_keeps_workbook_readable_and_continue_regrades_uncommitted_result(self):
         offline = OfflineCodexRunner(self.identities[:2])
         pipeline = self.make_pipeline(offline)
         original_save = pipeline.excel._save
@@ -436,9 +434,30 @@ class RealBatchParallelTests(unittest.TestCase):
         )
         self.assertEqual(resumed["already_complete"], 1)
         self.assertEqual([item["identity"]["student_id"] for item in resumed["validated"]], ["02"])
-        self.assertEqual(len(offline.calls), 2)
+        self.assertEqual(len(offline.calls), 3)
         self.assertEqual([row[1] for row in self.read_rows()], ["01", "02"])
         self.assertTrue(failed_once)
+
+    def test_authoritative_commit_survives_transient_corruption_and_profile_change(self):
+        offline = OfflineCodexRunner(self.identities[:1])
+        pipeline = self.make_pipeline(offline)
+        first = pipeline.run_real_batch(
+            self.records[:1], self.source_dir, model_profile="luna_xhigh"
+        )
+        self.assertEqual(len(first["validated"]), 1)
+        job_dir = self.root / "jobs" / self.batch_id / job_key(self.identities[0])
+        (job_dir / "student_record.json").write_text("{", encoding="utf-8")
+        (job_dir / "validated_result.json").write_text("not-json", encoding="utf-8")
+        offline.calls.clear()
+
+        reopened = self.make_pipeline(offline).run_real_batch(
+            self.records[:1], self.source_dir, model_profile="sol_medium"
+        )
+        self.assertEqual(reopened["already_complete"], 1)
+        self.assertEqual(reopened["validated"], [])
+        self.assertEqual(reopened["failed"], [])
+        self.assertEqual(offline.calls, [])
+        self.assertEqual([row[1] for row in self.read_rows()], ["01"])
 
     def test_progress_stays_in_progress_until_authoritative_save_finishes(self):
         offline = OfflineCodexRunner(self.identities[:1])

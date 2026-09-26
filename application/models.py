@@ -4,6 +4,12 @@ from enum import Enum
 from pathlib import Path
 
 
+DISPOSABLE_ATTENTION_CODES = frozenset({
+    "GRADING_ARTIFACT_INVALID",
+    "GRADING_ARTIFACT_MISSING",
+})
+
+
 class Action(str, Enum):
     PREPARE_SUBMISSIONS = "PREPARE_SUBMISSIONS"
     CONFIRM_SUBMISSIONS = "CONFIRM_SUBMISSIONS"
@@ -71,7 +77,6 @@ class SubmissionState:
     evidence: tuple[str, ...] = ()
     attention: tuple[Attention, ...] = ()
     next_actions: tuple[Action, ...] = ()
-    retryable: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,17 +99,27 @@ class Inspection:
     def summary(self) -> dict[str, int]:
         items = self.submissions
         issues = self.attention + tuple(a for s in items for a in s.attention)
+        # Validated checkpoints and parsed artifacts are transient attempt
+        # evidence. Only a matching workbook result plus audit row is DONE.
+        committed = sum(s.workbook_valid for s in items)
         return {
             "submissions": len(items),
-            "grading_results_available": sum(s.grading_available for s in items),
+            "grading_results_available": committed,
+            "committed_results": committed,
+            "committed_results_available": committed,
+            "transient_grading_artifacts": sum(
+                s.grading_available and not s.workbook_valid for s in items
+            ),
             "approved": sum(s.workbook_valid and s.review_status == "APPROVED" for s in items),
             "awaiting_review": sum(s.workbook_valid and s.review_status == "PENDING" for s in items),
             "rendered": sum(s.rendered for s in items),
             "ready_to_render": sum(s.ready_to_render for s in items),
-            "submissions_needing_attention": sum(bool(s.attention) for s in items),
+            "submissions_needing_attention": sum(
+                any(a.code not in DISPOSABLE_ATTENTION_CODES for a in s.attention)
+                for s in items
+            ),
             "blocking_errors": sum(a.severity == "error" for a in issues),
-            "retryable_failures": sum(s.retryable for s in items),
             "marking_available": sum(
-                Action.RUN_MARKING in s.next_actions and not s.retryable for s in items
+                Action.RUN_MARKING in s.next_actions for s in items
             ),
         }

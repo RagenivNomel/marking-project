@@ -62,7 +62,7 @@ class TeacherFlowTests(unittest.TestCase):
             "summary": {
                 "submissions": 2, "identity_confirmed": 2,
                 "grading_results_available": 1, "awaiting_review": 1,
-                "marking_available": 1, "retryable_failures": 0,
+                "marking_available": 1,
                 "rendered": 0, "ready_to_render": 0,
                 "approved": 0, "submissions_needing_attention": 0,
                 "blocking_errors": 0,
@@ -76,7 +76,7 @@ class TeacherFlowTests(unittest.TestCase):
         flow = derive_teacher_flow(state, "en")
 
         self.assertEqual(flow["step"], "resume_marking")
-        self.assertEqual(flow["primaryActionLabel"], "Resume marking")
+        self.assertEqual(flow["primaryActionLabel"], "Continue marking")
         self.assertTrue(flow["primaryActionEnabled"])
 
     def test_identity_attention_precedes_marking(self):
@@ -87,19 +87,19 @@ class TeacherFlowTests(unittest.TestCase):
         self.assertEqual(flow["primaryActionLabel"], "确认学生资料")
         self.assertEqual(flow["stage"], "preparation")
 
-    def test_identity_gate_precedes_recovery_action(self):
+    def test_identity_gate_precedes_unfinished_marking_action(self):
         state = {
             "language": "en",
             "summary": {
                 "submissions": 2,
                 "identity_confirmed": 1,
                 "grading_results_available": 0,
-                "retryable_failures": 1,
+                "marking_available": 1,
                 "submissions_needing_attention": 1,
                 "rendered": 0,
             },
             "rows": [],
-            "attention": [{"details": "MARKING_RETRY_AVAILABLE\nretry"}],
+            "attention": [{"details": "IDENTITY_UNRESOLVED\nconfirm"}],
             "actionAdvice": [
                 {"action": Action.RUN_MARKING.value, "executionWired": True},
                 {"action": Action.CONFIRM_SUBMISSIONS.value, "executionWired": False},

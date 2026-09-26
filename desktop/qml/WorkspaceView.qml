@@ -16,7 +16,7 @@ Item {
     signal inspectRequested()
     signal refreshRequested()
     signal confirmIdentitiesRequested(var selections)
-    signal markingRequested(bool retryOnly)
+    signal markingRequested()
     signal cancelMarkingRequested()
     signal feedbackRequested()
     signal backRequested()
@@ -114,7 +114,7 @@ Item {
             onInspectRequested: workspace.inspectRequested()
             onRefreshRequested: workspace.refreshRequested()
             onConfirmIdentitiesRequested: workspace.confirmIdentitiesRequested(selections)
-            onMarkingRequested: function(retryOnly) { workspace.markingRequested(retryOnly) }
+            onMarkingRequested: workspace.markingRequested()
             onCancelMarkingRequested: workspace.cancelMarkingRequested()
             onFeedbackRequested: workspace.feedbackRequested()
         }
