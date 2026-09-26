@@ -102,8 +102,13 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
         and feedback_cards_dir.is_dir()
         and any(path.is_file() for path in feedback_cards_dir.glob("*-作文体检卡.png"))
     )
-    subtitle = (f'{inspection.display_name} · {summary["submissions"]} submissions / {summary["identities"]} students'
-                if en else f'{inspection.display_name} · {summary["submissions"]}份作文 / {summary["identities"]}名学生')
+    if summary["submissions"] and not summary["identities"]:
+        # Before confirmation "0 students" reads like an error.
+        subtitle = (f'{inspection.display_name} · {summary["submissions"]} submissions · Student identities not yet confirmed'
+                    if en else f'{inspection.display_name} · {summary["submissions"]}份作文 · 学生身份尚未确认')
+    else:
+        subtitle = (f'{inspection.display_name} · {summary["submissions"]} submissions / {summary["identities"]} students'
+                    if en else f'{inspection.display_name} · {summary["submissions"]}份作文 / {summary["identities"]}名学生')
     notice = ('Local assignment · Saved files were checked; marking is not running.'
               if en else '本地作文任务 · 已检查保存的资料；当前没有运行批改。')
     state = dict(demo=False, scenario='real', view='workspace', section=2, title=title,

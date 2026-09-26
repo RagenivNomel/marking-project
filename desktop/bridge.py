@@ -13,8 +13,10 @@ from desktop.fixtures import demo_state
 from desktop.identity_confirmation import (
     DEFAULT_ROSTER,
     build_identity_review,
+    prepare_identity_suggestions,
     resolve_identity_companions,
     save_identity_confirmations,
+    with_decisions_dir,
 )
 from desktop.projection import project, set_section
 from desktop.teacher_flow import derive_teacher_flow
@@ -33,19 +35,38 @@ def _committed_results(summary):
                 return 0
     return 0
 
+def task_title(source, language):
+    """Teacher-facing task name; never the app's internal scan workspace folder."""
+    if source.continuous_scan is not None:
+        return Path(source.continuous_scan).parent.name
+    if source.workbook is not None:
+        return source.workbook.stem
+    if source.split_pile is not None:
+        return source.split_pile.name
+    return 'Local composition materials' if language == 'en' else '本地作文资料'
+
 class ReadSignals(QObject):
     finished = Signal(object, object, str)
 
 class ReadTask(QRunnable):
-    def __init__(self, controller, source, refresh):
+    def __init__(self, controller, source, refresh, identity_matcher=None, decisions_dir=None):
         super().__init__()
         self.controller, self.source, self.refresh = controller, source, refresh
+        self.identity_matcher, self.decisions_dir = identity_matcher, decisions_dir
         self.signals = ReadSignals()
 
     def run(self):
         try:
             source = (self.controller.prepare_source(self.source)
                       if hasattr(self.controller, 'prepare_source') else self.source)
+            source = with_decisions_dir(source, self.decisions_dir)
+            # Only scans the app splits itself; pre-built piles are already labelled.
+            if self.identity_matcher is not None and self.source.continuous_scan is not None:
+                try:
+                    prepare_identity_suggestions(source, self.identity_matcher)
+                except Exception:
+                    # Guessing is a convenience: the teacher can still pick by hand.
+                    traceback.print_exc()
             source = (self.controller.bind_source(source)
                       if hasattr(self.controller, 'bind_source') else source)
             method = self.controller.refresh_review_status if self.refresh else self.controller.inspect
@@ -119,9 +140,12 @@ class DesktopBridge(QObject):
     changed = Signal()
     busyChanged = Signal()
 
-    def __init__(self, controller=None, parent=None, *, open_url=None):
+    def __init__(self, controller=None, parent=None, *, open_url=None, identity_matcher=None,
+                 identity_decisions_dir=None):
         super().__init__(parent)
         self._controller = controller or WorkflowController()
+        self._identity_matcher = identity_matcher
+        self._identity_decisions_dir = identity_decisions_dir
         self._open_url = open_url or QDesktopServices.openUrl
         self._language = 'zh'
         self._state = demo_state('home', self._language)
@@ -182,7 +206,7 @@ class DesktopBridge(QObject):
         self._language = language
         reduced = previous['reducedMotion']
         if not previous['demo'] and self._inspection is not None and self._source is not None:
-            title = self._source.workbook.stem if self._source.workbook else (self._source.split_pile.name if self._source.split_pile else ('Local composition materials' if language == 'en' else '本地作文资料'))
+            title = task_title(self._source, language)
             state = project(self._inspection, self._source, title, language)
             self._attach_identity_review(state, self._source, self._inspection)
             state = set_section(state, previous['section'], language)
@@ -285,7 +309,8 @@ class DesktopBridge(QObject):
             '正在读取指定的本地资料；不会更改文件。'
         )
         self.changed.emit()
-        task = ReadTask(self._controller, source, refresh)
+        task = ReadTask(self._controller, source, refresh, self._identity_matcher,
+                        self._identity_decisions_dir)
         task.signals.finished.connect(self._finished)
         self._task = task
         self.pool.start(task)
@@ -343,7 +368,7 @@ class DesktopBridge(QObject):
             self._state['notice'] = ('This read did not complete. The previous content remains below; check the location and try again.' if self._language == 'en' else '本次读取未完成。下方仍为上次显示的内容，请检查文件位置后重试。')
             self._state['attention'] = [dict(title=('Read did not complete' if self._language == 'en' else '资料读取未完成'), message=('Check that the selected file or folder is available. No file was changed.' if self._language == 'en' else '请检查所选文件或文件夹是否可用；文件未被修改。'), details=error)]
         else:
-            title = source.workbook.stem if source.workbook else (source.split_pile.name if source.split_pile else ('Local composition materials' if self._language == 'en' else '本地作文资料'))
+            title = task_title(source, self._language)
             self._state = set_section(project(inspection, source, title, self._language), 2, self._language)
             self._attach_identity_review(self._state, source, inspection)
             self._state['inspectedAt'] = datetime.now().strftime('%H:%M:%S')
@@ -455,7 +480,7 @@ class DesktopBridge(QObject):
         reduced = self._state["reducedMotion"]
         elapsed = self._state.get("progress", {}).get("elapsed", "—")
         if inspection is not None:
-            title = source.workbook.stem if source.workbook else (source.split_pile.name if source.split_pile else "Local composition materials")
+            title = task_title(source, self._language)
             self._state = set_section(project(inspection, source, title, self._language), 2, self._language)
             self._attach_identity_review(self._state, source, inspection)
             self._source, self._inspection = source, inspection
@@ -591,7 +616,7 @@ class DesktopBridge(QObject):
         elapsed = previous_progress.get("elapsed", "—")
         result = outcome if isinstance(outcome, dict) else {}
         if inspection is not None:
-            title = source.workbook.stem if source.workbook else (source.split_pile.name if source.split_pile else "Local composition materials")
+            title = task_title(source, self._language)
             self._state = set_section(project(inspection, source, title, self._language), 3, self._language)
             self._attach_identity_review(self._state, source, inspection)
             self._source, self._inspection = source, inspection

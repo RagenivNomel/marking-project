@@ -24,7 +24,7 @@ def polish_native_window(window):
     except (AttributeError, OSError, ValueError):
         pass
 
-def create_app(argv=None, dev_ui=False, controller=None):
+def create_app(argv=None, dev_ui=False, controller=None, identity_matcher=None, identity_decisions_dir=None):
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
     from PySide6.QtQml import QQmlApplicationEngine
@@ -41,7 +41,8 @@ def create_app(argv=None, dev_ui=False, controller=None):
     font = QFont(font_name)
     font.setPixelSize(16)
     app.setFont(font)
-    bridge = DesktopBridge(controller=controller)
+    bridge = DesktopBridge(controller=controller, identity_matcher=identity_matcher,
+                           identity_decisions_dir=identity_decisions_dir)
     bridge.setReducedMotion(prefers_reduced_motion())
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty('bridge', bridge)
@@ -70,9 +71,22 @@ def main():
     parser.add_argument('--identity-decisions', type=Path)
     parser.add_argument('--project-dir', type=Path, help='isolated output and job root for a local verification task')
     parser.add_argument('--reduced-motion', action='store_true')
+    parser.add_argument('--fake-marking', action='store_true',
+                        help='test the teacher flow with instant fake marking (no marking model calls)')
     args = parser.parse_args()
     controller = WorkflowController(project_dir=args.project_dir) if args.project_dir else None
-    app, engine, bridge = create_app([sys.argv[0]], dev_ui=args.dev_ui, controller=controller)
+    decisions_dir = None
+    if args.fake_marking:
+        from desktop.fake_marking import FAKE_PROJECT_DIR, fake_marking_controller
+        controller = fake_marking_controller(args.project_dir or FAKE_PROJECT_DIR)
+        # Test confirmations must never overwrite a real task's confirmations.
+        decisions_dir = (args.project_dir or FAKE_PROJECT_DIR) / "config"
+        print('FAKE MARKING: no marking model calls; results are labelled 【测试】. '
+              'Use a copy of a scan, not a real task.', file=sys.stderr, flush=True)
+    from scanning.roster_matcher import CodexRosterMatcher
+    app, engine, bridge = create_app([sys.argv[0]], dev_ui=args.dev_ui, controller=controller,
+                                     identity_matcher=CodexRosterMatcher(),
+                                     identity_decisions_dir=decisions_dir)
     bridge.setLanguage(args.language)
     if args.dev_ui:
         bridge.selectDemo(args.demo)
