@@ -97,7 +97,7 @@ def _read_only_guards():
         (CodexSolGrader, "grade", "inspection must not use Codex grading"),
         (SolGrader, "grade", "inspection must not use API grading"),
         (Pipeline, "run_mock", "inspection must not run a mock pipeline"),
-        (Pipeline, "run_real_pdf", "inspection must not run real grading"),
+        (Pipeline, "_grade_essay", "inspection must not run real grading"),
         (Pipeline, "run_real_batch", "inspection must not run real batches"),
         (CalibrationPipeline, "prepare", "inspection must not prepare grading"),
         (CalibrationPipeline, "run", "inspection must not run calibration"),
@@ -222,7 +222,7 @@ class ProjectionTests(unittest.TestCase):
 
         self.assertEqual(state["attention"][0]["message"], message)
         self.assertEqual(state["attention"][0]["details"], f"LONG_MESSAGE\n{details}")
-        self.assertEqual(state["rows"][0]["details"].splitlines()[-2:], [f"保存记录：无", f"LONG_MESSAGE: {details}"])
+        self.assertEqual(state["rows"][0]["details"].splitlines()[-1], f"LONG_MESSAGE: {details}")
 
     def test_demo_progress_adds_up_to_total_and_labels_waiting_truthfully(self):
         state = demo_state("marking")

@@ -22,13 +22,12 @@ from application.models import (
 )
 from excel.schema import AUDIT_HEADERS, AUDIT_SHEET, HEADERS, SHEET
 from excel.workbook import ExcelStore, read_roster, roster_text
-from grading.calibration_schema import CalibrationValidator
 from grading.schemas import Identity, ROOT, ValidationError, Validator
 from scanning.intake import apply_identity_decisions, read_existing_split
 from scanning.split_by_student import split_continuous_anonymous
-from workflow.state import State
+from workflow.pipeline import job_key
 from workflow.storage import atomic_json, batch_lock, lock_is_active, read_json
-from .task_storage import legacy_output_paths, teacher_output_paths
+from .task_storage import teacher_output_paths
 
 
 WORKFLOW_ID = "sec2_hcl_composition_v1"
@@ -42,8 +41,6 @@ STAGES = (
     Stage("refresh_review", "重新读取审核结果", execution_wired=True),
     Stage("render", "生成学生体检卡"), Stage("deliver", "查看反馈输出"),
 )
-_VALIDATED = {"VALIDATED", "REVIEWED", "APPROVED", "RENDERED", "COMPLETE"}
-_IDENTIFIED = _VALIDATED | {"IDENTIFIED", "TRANSCRIBED", "GRADED"}
 
 
 def _path(value, base=None):
@@ -64,7 +61,6 @@ class _Entry:
     grading: bool = False
     record: object = None
     audit: dict | None = None
-    state: str | None = None
     rendered: bool = False
     evidence: list = field(default_factory=list)
     attention: list = field(default_factory=list)
@@ -135,118 +131,45 @@ class CompositionWorkflow:
             raise ValueError("A continuous scan or prepared composition folder is required")
         return "teacher_" + sha256(stable_path.encode("utf-8")).hexdigest()[:20]
 
-    @staticmethod
-    def _requires_result_workbook(jobs: Path) -> bool:
-        """A saved grading result must not become a fresh task if Excel is lost."""
-        if not jobs.is_dir():
-            return False
-        try:
-            for directory in jobs.iterdir():
-                if not directory.is_dir():
-                    continue
-                if any((directory / name).exists() for name in ("grading_result.json", "validated_result.json")):
-                    return True
-                checkpoint_path = directory / "student_record.json"
-                if checkpoint_path.is_file():
-                    try:
-                        state = read_json(checkpoint_path).get("state")
-                    except Exception:
-                        return True
-                    if state == "GRADED" or state in _VALIDATED:
-                        return True
-        except OSError:
-            return True
-        return False
-
     def marking_source(self, source: AssignmentSource) -> AssignmentSource:
-        """Resolve this task's workbook without asking the teacher for an output path."""
+        """Bind a prepared task to its own jobs folder and results workbook.
+
+        The workbook is derived from the task alone; saved job files never
+        choose or redirect it. Explicitly attached job roots stay a separate
+        import view and are not mixed with the managed workbook.
+        """
         if source.split_pile is None:
             return source
-        batch = self.marking_batch_id(source)
-        jobs = (self.project_dir / "jobs" / batch).resolve()
-        current_paths = teacher_output_paths(self._teacher_root(source))
-        legacy_paths = legacy_output_paths(self.project_dir, batch)
-        workbook_candidates = (current_paths.workbook, legacy_paths.workbook)
-        attached_jobs = source.job_roots
-        requires_workbook = self._requires_result_workbook(jobs)
-        if not attached_jobs and jobs.is_dir():
-            attached_jobs = (jobs,)
-        saved_bindings = set()
-        if jobs.is_dir():
-            try:
-                for directory in jobs.iterdir():
-                    checkpoint_path = directory / "student_record.json"
-                    if not directory.is_dir() or not checkpoint_path.is_file():
-                        continue
-                    try:
-                        saved = read_json(checkpoint_path).get("workbook")
-                    except Exception:
-                        continue
-                    if isinstance(saved, str) and saved.strip():
-                        saved_bindings.add(_path(saved, directory))
-            except OSError:
-                pass
-
-        existing = [path.resolve() for path in workbook_candidates if path.is_file()]
-        conflict = len(existing) > 1
-        requested = _path(source.workbook) if source.workbook is not None else None
-        attached_workbook = requested
-        if requested is None and source.job_roots:
-            # Explicit attached roots remain an import workflow. Do not mix
-            # them with this project's automatically managed task workbook.
-            attached_workbook = None
-        elif requested is None or requested in workbook_candidates:
-            if conflict:
-                attached_workbook = current_paths.workbook
-            elif current_paths.workbook.is_file():
-                attached_workbook = current_paths.workbook
-            elif legacy_paths.workbook.is_file():
-                attached_workbook = legacy_paths.workbook
-            else:
-                saved = [path for path in saved_bindings if path in workbook_candidates]
-                if len(saved) == 1 and requires_workbook:
-                    attached_workbook = saved[0]
-                elif requires_workbook:
-                    # If a previous job exists but the workbook is missing,
-                    # keep a deterministic missing-file reference for review.
-                    attached_workbook = legacy_paths.workbook if legacy_paths.workbook in saved_bindings else current_paths.workbook
-                else:
-                    attached_workbook = None
-
-        results_directory = (attached_workbook.parent if attached_workbook in workbook_candidates
-                             else current_paths.results_directory)
-        feedback_directory = results_directory / "Feedback Cards"
+        jobs = (self.project_dir / "jobs" / self.marking_batch_id(source)).resolve()
+        paths = teacher_output_paths(self._teacher_root(source))
+        workbook = source.workbook
+        if workbook is None and not source.job_roots:
+            workbook = paths.workbook
+        if (workbook is not None and _path(workbook) == paths.workbook.resolve()
+                and not paths.workbook.is_file()):
+            # The task workbook is an output: attach it only once it exists.
+            workbook = None
+        job_roots = source.job_roots or ((jobs,) if jobs.is_dir() else ())
         return replace(
             source,
-            workbook=attached_workbook,
-            job_roots=attached_jobs,
-            results_directory=results_directory,
-            feedback_cards_directory=feedback_directory,
-            output_location_conflict=conflict,
+            workbook=workbook,
+            job_roots=job_roots,
+            results_directory=paths.results_directory,
+            feedback_cards_directory=paths.feedback_cards_directory,
         )
 
     def inspect(self, source: AssignmentSource) -> Inspection:
         source = self.prepare_source(source)
         source = self.marking_source(source)
         if source.split_pile is not None and source.workbook is not None:
-            batch = self.marking_batch_id(source)
-            allowed = {
-                teacher_output_paths(self._teacher_root(source)).workbook.resolve(),
-                legacy_output_paths(self.project_dir, batch).workbook.resolve(),
-            }
-            if _path(source.workbook) not in allowed:
+            expected = teacher_output_paths(self._teacher_root(source)).workbook.resolve()
+            if _path(source.workbook) != expected:
                 return self._finish({}, [Attention(
                     "SOURCE_ASSOCIATION_MISMATCH", "error",
                     "所选工作簿与作文资料不属于同一任务，请分别读取。",
-                    f"Selected workbook: {_path(source.workbook)}; expected for this assignment: {sorted(map(str, allowed))}",
+                    f"Selected workbook: {_path(source.workbook)}; expected for this assignment: {expected}",
                 )], False)
         entries, issues = {}, []
-        if source.output_location_conflict:
-            issues.append(Attention(
-                "WORKBOOK_LOCATION_CONFLICT", "error",
-                "这项任务找到两个批改结果工作簿，暂时无法安全确定审核文件。",
-                "Both the current Results/results.xlsx and the historical output/<batch>/results.xlsx exist.",
-            ))
         try:
             validator = Validator(source.config_dir or ROOT / "config")
         except Exception as exc:
@@ -259,7 +182,10 @@ class CompositionWorkflow:
                 self._workbook(workbook, validator, entries, issues)
             except Exception as exc:
                 issues.append(Attention("WORKBOOK_UNREADABLE", "error", "无法读取审核工作簿，请检查文件是否可用。", str(exc)))
-        self._jobs(source, workbook, validator, entries, issues)
+        for root in source.job_roots:
+            lock = _path(root) / ".pipeline.lock"
+            if lock_is_active(lock):
+                issues.append(Attention("BATCH_LOCKED", "error", "任务可能仍在运行，请先检查，不要直接重试。", str(lock)))
         self._intake(source, entries, issues)
         self._cards(source, workbook, entries, issues)
         if before is not None:
@@ -344,135 +270,6 @@ class CompositionWorkflow:
                 issues.append(Attention("ARTIFACT_ROOT_UNREADABLE", "error", "部分任务资料无法读取，请检查文件夹。", str(exc)))
         return sorted(paths)
 
-    def _jobs(self, source, workbook, validator, entries, issues):
-        paths = self._find(source.job_roots, "student_record.json", issues)
-        jobs = {}
-        for path in paths:
-            try:
-                checkpoint = read_json(path)
-                if not isinstance(checkpoint, dict):
-                    raise ValueError("Checkpoint must be an object")
-                jobs[path.parent] = checkpoint
-            except Exception as exc:
-                key = f"job:{path.parent}"
-                entry = entries.setdefault(key, _Entry(key, evidence=[str(path)]))
-                entry.issue("CHECKPOINT_INVALID", "这份作文的保存记录无法读取。", exc)
-        # A calibration job is evidence for its exact production parent, not another essay.
-        children = {}
-        for directory in list(jobs):
-            bridge = directory / "real_grading_bridge.json"
-            if bridge.is_file():
-                try:
-                    data = read_json(bridge)
-                    child = _path(data["calibration_job"], directory)
-                    if not (child / "student_record.json").is_file():
-                        # An interrupted child is disposable attempt evidence.
-                        continue
-                    elif child not in jobs:
-                        # The production calibration checkpoint lives beside the
-                        # batch folder. Follow only the exact path recorded in
-                        # this student's bridge artifact; do not search the repo.
-                        child_checkpoint = read_json(child / "student_record.json")
-                        if not isinstance(child_checkpoint, dict):
-                            raise ValueError("Calibration checkpoint must be an object")
-                        jobs[child] = child_checkpoint
-                    if child in jobs:
-                        if child in children:
-                            raise ValueError("Calibration job has multiple production parents")
-                        children[child] = directory
-                except Exception:
-                    # A malformed or stale bridge is disposable attempt
-                    # evidence. Only a readable child with a real identity,
-                    # source, workbook, or audit conflict is actionable.
-                    continue
-        seen = set()
-        for directory, checkpoint in jobs.items():
-            if directory in children:
-                continue
-            key = checkpoint.get("job_id", directory.name)
-            if not isinstance(key, str) or not key.strip():
-                key = f"job:{directory}"
-            entry = entries.setdefault(key, _Entry(key))
-            entry.evidence.append(str(directory / "student_record.json"))
-            if key in seen:
-                entry.issue("DUPLICATE_JOB", "多份保存记录使用了同一作文标识，需要核对。", key)
-                continue
-            seen.add(key)
-            self._job(directory, checkpoint, entry, workbook, validator)
-            for child, parent in children.items():
-                if parent == directory:
-                    child_cp = jobs[child]
-                    entry.evidence.append(str(child / "student_record.json"))
-                    if child_cp.get("identity") != checkpoint.get("identity"):
-                        entry.issue("BRIDGE_IDENTITY_MISMATCH", "批改来源的学生信息不一致。", str(child))
-                    if checkpoint.get("source_sha256") != child_cp.get("source_sha256"):
-                        entry.issue("BRIDGE_SOURCE_MISMATCH", "批改来源的作文内容标识不一致。", str(child))
-                    # Calibration child state, model-attempt counters, and
-                    # validation reports are transient attempt evidence. They
-                    # never block ordinary processing of a NOT-DONE essay.
-        for root in source.job_roots:
-            lock = _path(root) / ".pipeline.lock"
-            if lock_is_active(lock):
-                issues.append(Attention("BATCH_LOCKED", "error", "任务可能仍在运行，请先检查，不要直接重试。", str(lock)))
-        # Orphan raw/parsed/validated/model artifacts are disposable attempt
-        # evidence. They do not create a submission or block ordinary marking.
-
-    @staticmethod
-    def _job(directory, checkpoint, entry, workbook, validator):
-        try:
-            identity = Identity.from_dict(checkpoint["identity"])
-            if entry.identity is not None and entry.identity != identity:
-                raise ValueError("Checkpoint identity differs from workbook identity")
-            entry.identity = identity
-            state = State(checkpoint["state"]).value
-            entry.state = state
-            if workbook is not None and checkpoint.get("workbook") and _path(checkpoint["workbook"], directory) != workbook:
-                raise ValueError("Checkpoint workbook path differs from selected workbook")
-            if entry.audit and checkpoint.get("input_digest") != entry.audit["input_digest"]:
-                raise ValueError("Checkpoint digest differs from Excel audit digest")
-            entry.confirmed = entry.confirmed or state in _IDENTIFIED
-            source_meta = directory / "source.json"
-            if source_meta.is_file():
-                data = read_json(source_meta)
-                original = data.get("source_original_path")
-                if original:
-                    entry.source_paths.add(_path(original, directory))
-            if checkpoint.get("source_original_path"):
-                entry.source_paths.add(_path(checkpoint["source_original_path"], directory))
-            pdf = directory / "source.pdf"
-            if pdf.is_file():
-                entry.source_paths.add(pdf.resolve())
-                entry.evidence.append(str(pdf))
-                if checkpoint.get("source_sha256") and _hash(pdf) != checkpoint["source_sha256"]:
-                    raise ValueError("Saved PDF hash differs from checkpoint")
-            # The persisted validated artifact is checked even when Excel is now edited.
-            found_valid = False
-            for filename in ("validated_result.json", "parsed_result.json", "grading_result.json"):
-                artifact = directory / filename
-                if not artifact.is_file():
-                    continue
-                entry.evidence.append(str(artifact))
-                try:
-                    value = read_json(artifact)
-                    if filename == "parsed_result.json":
-                        count = checkpoint.get("source_page_count", checkpoint.get("page_count"))
-                        if type(count) is not int or count <= 0:
-                            raise ValueError("Calibration page count missing from checkpoint")
-                        response = CalibrationValidator(validator.limits, count).validate(value, identity)
-                        value = response.to_dict()["grading"]
-                    validator.validate(value, identity)
-                    found_valid = True
-                except Exception as exc:
-                    entry.issue("GRADING_ARTIFACT_INVALID", "保存的批改结果需要检查。", f"{artifact}: {exc}", severity="warning")
-            entry.grading = entry.grading or found_valid
-            if state in _VALIDATED and not found_valid:
-                entry.issue("GRADING_ARTIFACT_MISSING", "之前的批改资料不完整，将按未完成作文重新处理。", str(directory), severity="warning")
-            # Persistence receipts and checkpoint errors describe an attempt,
-            # not the authoritative result.  A missing workbook row remains
-            # ordinary NOT-DONE work and is selected again after confirmation.
-        except Exception as exc:
-            entry.issue("CHECKPOINT_INCONSISTENT", "这份作文的保存记录与现有资料不一致。", exc)
-
     @staticmethod
     def _intake(source, entries, issues):
         if source.split_pile is None:
@@ -499,35 +296,34 @@ class CompositionWorkflow:
                 issues.append(Attention("IDENTITY_DECISIONS_INVALID", "error", "学生确认记录需要检查。", str(exc)))
         for submission in submissions:
             pdf = (pile / submission.source_pdf).resolve()
-            matches = [e for e in entries.values() if pdf in e.source_paths]
-            if len(matches) == 1:
-                entry = matches[0]
-            else:
-                key = f"submission:{pdf}"
-                entry = entries.setdefault(key, _Entry(key))
-                if matches:
-                    entry.issue("SOURCE_ASSOCIATION_AMBIGUOUS", "作文来源对应多份保存记录，需要核对。", str(pdf))
+            record = decisions.get(submission.source_pdf)
+            identity = (Identity.from_dict({k: record[k] for k in ("class_name", "student_id", "student_name")})
+                        if record else None)
+            confirmed = bool(record and record["match_status"] == "STRONG_ROSTER_MATCH")
+            # A confirmed essay's saved result is the workbook row keyed by the
+            # same student; decisions allow each student only once per task.
+            key = job_key(identity) if confirmed else f"submission:{pdf}"
+            entry = entries.setdefault(key, _Entry(key))
             entry.evidence.append(str(pdf))
             entry.source_paths.add(pdf)
-            record = decisions.get(submission.source_pdf)
-            if record:
-                identity = Identity.from_dict({k: record[k] for k in ("class_name", "student_id", "student_name")})
+            if confirmed:
                 if entry.identity is not None and identity != entry.identity:
                     entry.issue("IDENTITY_MISMATCH", "学生确认信息与保存记录不一致。", str(pdf))
-                elif record["match_status"] == "STRONG_ROSTER_MATCH":
-                    entry.identity, entry.confirmed = identity, True
-                    if entry.state is None and not entry.grading and not entry.attention:
-                        # A workbook-only row cannot be linked by student identity alone.
-                        same_student = [e for e in entries.values() if e is not entry and e.identity == identity]
-                        if same_student:
-                            entry.issue("SUBMISSION_LINK_REQUIRED", "已有同一学生的结果，请先核对是否为同一份作文。", str(pdf))
-                        else:
-                            pass
                 else:
+                    entry.identity, entry.confirmed = identity, True
+                # Another workbook row for this student that is not this
+                # essay's audited row cannot be overwritten, so marking stops.
+                student = (identity.class_name, identity.student_id)
+                unlinked = [other.key for other in entries.values() if other is not entry
+                            and other.identity is not None
+                            and (other.identity.class_name, other.identity.student_id) == student]
+                if unlinked:
+                    entry.issue("WORKBOOK_ROW_INVALID", "这份作文的审核数据需要检查，原文没有被修改。",
+                                f"Workbook rows for this student not linked to this essay: {unlinked}")
+            else:
+                if identity is not None:
                     entry.identity = identity
-                    entry.confirmed = False
-                    entry.issue("IDENTITY_UNRESOLVED", "请确认这份作文对应的学生。", str(pdf), "warning")
-            elif not entry.confirmed:
+                entry.confirmed = False
                 entry.issue("IDENTITY_UNRESOLVED", "请确认这份作文对应的学生。", str(pdf), "warning")
 
     def _cards(self, source, workbook, entries, issues):
@@ -585,8 +381,6 @@ class CompositionWorkflow:
             # Conflicting receipts need an explicit choice; don't advertise a mixed result.
             if any(a.code.startswith(("CARD_", "RECEIPT_")) for a in entry.attention):
                 entry.rendered = False
-            if entry.state in {"RENDERED", "COMPLETE"} and entry.key not in found_for:
-                entry.issue("RECEIPT_MISSING", "记录显示体检卡已生成，但未找到可核对的生成记录。", "Provide the associated receipt_roots; no matching receipt was found")
 
     @staticmethod
     def _finish(entries, issues, has_workbook):
@@ -621,7 +415,7 @@ class CompositionWorkflow:
                 student_id=identity.student_id if identity else None,
                 identity_confirmed=entry.confirmed, grading_available=entry.grading,
                 workbook_valid=entry.record is not None, review_status=review,
-                rendered=entry.rendered, ready_to_render=ready, checkpoint_state=entry.state,
+                rendered=entry.rendered, ready_to_render=ready,
                 evidence=tuple(dict.fromkeys(entry.evidence)), attention=tuple(entry.attention), next_actions=tuple(actions),
             ))
         if has_workbook:
@@ -644,16 +438,10 @@ class CompositionWorkflow:
         if source.workbook is None:
             raise ValidationError("Read the approved results workbook before generating feedback")
         workbook = _path(source.workbook)
-        if source.output_location_conflict:
-            raise ValidationError("Two results workbooks exist for this task; resolve the workbook location before generating feedback")
         if source.split_pile is not None:
             batch_id = self.marking_batch_id(source)
-            expected_workbook = ((source.results_directory or teacher_output_paths(self._teacher_root(source)).results_directory)
-                                 / "results.xlsx").resolve()
-            if workbook not in {
-                expected_workbook,
-                legacy_output_paths(self.project_dir, batch_id).workbook.resolve(),
-            }:
+            expected_workbook = teacher_output_paths(self._teacher_root(source)).workbook.resolve()
+            if workbook != expected_workbook:
                 raise ValidationError("The selected workbook does not match this task's managed results location")
         else:
             output_root = (self.project_dir / "output").resolve()
@@ -667,10 +455,7 @@ class CompositionWorkflow:
             expected_workbook = (output_root / batch_id / "results.xlsx").resolve()
         expected_jobs = (self.project_dir / "jobs" / batch_id).resolve()
         if workbook != expected_workbook:
-            if source.split_pile is None or workbook != legacy_output_paths(self.project_dir, batch_id).workbook.resolve():
-                raise ValidationError("The selected workbook does not match the task output location")
-        if source.split_pile is not None and self.marking_batch_id(source) != batch_id:
-            raise ValidationError("The selected workbook and submission folder belong to different tasks")
+            raise ValidationError("The selected workbook does not match the task output location")
         feedback_dir = source.feedback_cards_directory
         if feedback_dir is None:
             feedback_dir = workbook.parent / "Feedback Cards"
@@ -880,8 +665,7 @@ class CompositionWorkflow:
 
         batch_id = self.marking_batch_id(source)
         expected_jobs = (self.project_dir / "jobs" / batch_id).resolve()
-        expected_workbook = ((source.results_directory or teacher_output_paths(self._teacher_root(source)).results_directory)
-                             / "results.xlsx").resolve()
+        expected_workbook = teacher_output_paths(self._teacher_root(source)).workbook.resolve()
         if any(_path(root) != expected_jobs for root in source.job_roots):
             raise ValidationError("This assignment is linked to other saved marking records; read those records before starting a new run")
         if source.workbook is not None and _path(source.workbook) != expected_workbook:
@@ -933,6 +717,4 @@ class CompositionWorkflow:
             progress_callback=progress_callback,
             cancelled=cancelled,
         )
-        # Bind the completed inspection to files that actually exist. A missing
-        # workbook remains attached only when grading evidence requires it.
         return {"result": result, "source": self.marking_source(execution_source)}

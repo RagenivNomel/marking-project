@@ -26,7 +26,7 @@ from desktop.projection import project
 from desktop.teacher_flow import derive_teacher_flow
 from desktop.bridge import DesktopBridge
 from grading.sol_grader import CredentialUnavailable, SolGrader
-from tests.test_real_batch_integration import RecordingTransport
+from tests.test_real_batch_integration import RecordingTransport, working_state
 from workflow.calibration_pipeline import CalibrationPipeline
 from workflow.pipeline import Pipeline, fingerprint, job_key
 from excel.schema import AUDIT_HEADERS, AUDIT_SHEET, HEADERS, SHEET
@@ -294,42 +294,26 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         self.assertEqual(complete_flow["step"], "review")
         self.assertEqual(complete_flow["headline"], "Teacher review is ready ✓")
 
-        for damage in ("unreadable", "missing"):
-            if damage == "unreadable":
-                workbook.write_bytes(b"not an Excel workbook")
-            else:
-                workbook.unlink()
-            damaged_source = self.controller.bind_source(self.source)
-            self.assertEqual(damaged_source.workbook, workbook)
-            damaged = self.controller.inspect(damaged_source)
-            damaged_flow = derive_teacher_flow(project(damaged, damaged_source, language="en"), "en")
-            self.assertIn("WORKBOOK_UNREADABLE", [a.code for a in damaged.attention])
-            self.assertGreater(damaged.summary["blocking_errors"], 0)
-            self.assertEqual(damaged_flow["step"], "resolve_attention")
-            self.assertNotIn("Teacher review is ready", damaged_flow["headline"])
-            self.assertFalse(damaged_flow["primaryActionEnabled"])
-            self.assertFalse(any(a.action == Action.RUN_MARKING for a in damaged.available_actions))
+        workbook.write_bytes(b"not an Excel workbook")
+        damaged_source = self.controller.bind_source(self.source)
+        self.assertEqual(damaged_source.workbook, workbook)
+        damaged = self.controller.inspect(damaged_source)
+        damaged_flow = derive_teacher_flow(project(damaged, damaged_source, language="en"), "en")
+        self.assertIn("WORKBOOK_UNREADABLE", [a.code for a in damaged.attention])
+        self.assertGreater(damaged.summary["blocking_errors"], 0)
+        self.assertEqual(damaged_flow["step"], "resolve_attention")
+        self.assertNotIn("Teacher review is ready", damaged_flow["headline"])
+        self.assertFalse(damaged_flow["primaryActionEnabled"])
+        self.assertFalse(any(a.action == Action.RUN_MARKING for a in damaged.available_actions))
+
+        # With the workbook gone nothing is saved, so every essay is not done.
+        workbook.unlink()
+        missing_source = self.controller.bind_source(self.source)
+        self.assertIsNone(missing_source.workbook)
+        missing = self.controller.inspect(missing_source)
+        self.assertEqual(missing.summary["marking_available"], 2)
+        self.assertEqual(missing.summary["committed_results"], 0)
         self.assertEqual(len(self.transport.calls), 2)
-
-    def test_existing_old_layout_workbook_is_reused_without_migration(self):
-        batch = self.controller.workflow.marking_batch_id(self.source)
-        legacy_workbook = self.root / "output" / batch / "results.xlsx"
-        legacy_workbook.parent.mkdir(parents=True)
-        store = ExcelStore(legacy_workbook, Validator(ROOT / "config"))
-        book = store._open()
-        try:
-            store._save(book)
-        finally:
-            book.close()
-        before = legacy_workbook.read_bytes()
-
-        reopened = self.controller.bind_source(self.source)
-        inspection = self.controller.inspect(reopened)
-
-        self.assertEqual(reopened.workbook, legacy_workbook)
-        self.assertEqual(inspection.summary["blocking_errors"], 0)
-        self.assertFalse((self.pile / "Results").exists())
-        self.assertEqual(legacy_workbook.read_bytes(), before)
 
     def test_preflight_blocked_jobs_remain_visible_and_unfinished(self):
         app = QCoreApplication.instance() or QCoreApplication([])
@@ -384,12 +368,12 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             self.assertIsNone(rebound.workbook)
             reopened = self.controller.inspect(stale)
             self.assertEqual(reopened.summary["marking_available"], 2)
+            # A failed attempt leaves nothing behind: reopened, the essays are
+            # simply not done and ready to mark.
             self.assertEqual(derive_teacher_flow(project(reopened, rebound, language="en"), "en")["step"],
-                             "marking_start_failed")
-            reports = list((self.root / "jobs").glob("calibration_*/validation_report.json"))
-            self.assertEqual(len(reports), 2)
-            self.assertTrue(all(json.loads(p.read_text(encoding="utf-8"))["model_request_attempted"] is False
-                                for p in reports))
+                             "ready_to_mark")
+            for identity in self.identities:
+                self.assertEqual(working_state(self.root / "jobs" / batch / job_key(Identity.from_dict(identity))), [])
         finally:
             bridge.shutdown()
 
@@ -610,15 +594,11 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         self.assertEqual(len(self.transport.calls), 2)
 
         failed_identity = Identity.from_dict(self.identities[1])
-        failed_key = job_key(failed_identity)
         failed_job = (
             self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source)
-            / failed_key
+            / job_key(failed_identity)
         )
-        marker = json.loads(
-            (failed_job / "workbook_persistence.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(marker["status"], "FAILED")
+        self.assertEqual(working_state(failed_job), [])
 
         inspection = self.controller.inspect(self.source)
         failed_entry = next(item for item in inspection.submissions if item.student_id == "02")
@@ -646,7 +626,6 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         target = next(item for item in reopened.submissions if item.submission_id == target_key)
         self.assertFalse(target.workbook_valid)
         self.assertEqual(reopened.summary["grading_results_available"], 1)
-        self.assertEqual(reopened.summary["transient_grading_artifacts"], 1)
         self.assertIn(Action.RUN_MARKING, target.next_actions)
         self.assertEqual(reopened.summary["marking_available"], 1)
         self.assertEqual(reopened.summary["blocking_errors"], 0)
@@ -671,7 +650,9 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         )
         self._delete_workbook_result(workbook, target_key)
         marker_path = target_job / "workbook_persistence.json"
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        marker = {"schema_version": 1, "job_id": target_key, "status": "PENDING",
+                  "workbook": str(workbook)}
+        target_job.mkdir(parents=True, exist_ok=True)
 
         variants = [
             {**marker, "status": "SAVED"},
@@ -701,10 +682,9 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source) / target_key
         )
         self._delete_workbook_result(workbook, target_key)
-        (target_job / "workbook_persistence.json").unlink()
+        target_job.mkdir(parents=True, exist_ok=True)
         validated_path = target_job / "validated_result.json"
-        validated_bytes = validated_path.read_bytes()
-        validated_path.unlink()
+        validated_bytes = json.dumps(_valid_response(self.identities[1])["grading"]).encode("utf-8")
 
         missing = self.controller.inspect(self.source)
         missing_target = next(item for item in missing.submissions if item.submission_id == target_key)
@@ -795,9 +775,8 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source)
             / key / "workbook_persistence.json"
         )
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
-        marker["status"] = "PENDING"
-        marker.pop("review_status", None)
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker = {"schema_version": 1, "job_id": key, "status": "PENDING", "workbook": str(workbook)}
         marker_path.write_text(json.dumps(marker, ensure_ascii=False), encoding="utf-8")
         workbook_before = workbook.read_bytes()
         calls_before = len(self.transport.calls)
@@ -820,8 +799,8 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
             self.root / "jobs" / self.controller.workflow.marking_batch_id(self.source)
             / target_key / "workbook_persistence.json"
         )
-        marker = json.loads(marker_path.read_text(encoding="utf-8"))
-        marker["status"] = "PENDING"
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker = {"schema_version": 1, "job_id": target_key, "status": "PENDING"}
         marker_path.write_text(json.dumps(marker), encoding="utf-8")
 
         selected = []

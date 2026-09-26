@@ -1,5 +1,5 @@
 """Transient bilingual presentation of Stage 1 models; no new assessment authority."""
-from application.models import Inspection, AssignmentSource, DISPOSABLE_ATTENTION_CODES
+from application.models import Inspection, AssignmentSource
 from desktop.teacher_flow import derive_teacher_flow
 from application.workflows.task_storage import teacher_output_paths
 
@@ -28,9 +28,7 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
                                  if s.class_name and s.student_id})
     summary['identity_confirmed'] = sum(s.identity_confirmed for s in inspection.submissions)
     for index, item in enumerate(inspection.submissions, 1):
-        actionable_attention = tuple(
-            a for a in item.attention if a.code not in DISPOSABLE_ATTENTION_CODES
-        )
+        actionable_attention = item.attention
         if actionable_attention:
             status, tone = ('△ Needs attention' if en else '△ 需要处理'), 'attention'
         elif item.workbook_valid and item.review_status == 'PENDING':
@@ -56,11 +54,8 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
         if item.ready_to_render:
             facets.append('Passes pre-generation checks' if en else '符合生成前检查')
         submission_label = 'Submission ID' if en else '作文标识'
-        record_label = 'Saved record' if en else '保存记录'
-        none_label = 'None' if en else '无'
         separator = ': ' if en else '：'
         technical = '\n'.join([f'{submission_label}{separator}{item.submission_id}', *item.evidence,
-                               f'{record_label}{separator}{item.checkpoint_state or none_label}',
                                *[f'{a.code}: {a.technical_details}' for a in item.attention]])
         essay = f'Submission {index:03}' if en else f'作文 {index:03}'
         rows.append(dict(id=item.submission_id, ordinal=f'{index:03}', identity=identity,
@@ -98,7 +93,6 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
             feedback_cards_dir = results_workbook.parent / "Feedback Cards"
     results_available = bool(
         results_workbook is not None and results_workbook.is_file()
-        and not (source and source.output_location_conflict)
     )
     feedback_available = bool(
         summary.get("rendered", 0) > 0

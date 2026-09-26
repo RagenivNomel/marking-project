@@ -16,7 +16,7 @@ from excel.workbook import ExcelStore
 from grading.codex_sol_grader import CodexSolGrader
 from grading.schemas import Identity, ROOT, Validator
 from tests.local_temp import local_test_directory
-from tests.test_real_batch_integration import valid_response
+from tests.test_real_batch_integration import valid_response, working_state
 from workflow.calibration_pipeline import CalibrationPipeline
 from workflow.pipeline import MAX_CONCURRENT_GRADERS, Pipeline, job_key
 from workflow.storage import read_json
@@ -225,22 +225,10 @@ class RealBatchParallelTests(unittest.TestCase):
             expected_hash = hashlib.sha256((self.source_dir / record["source_pdf"]).read_bytes()).hexdigest()
             self.assertEqual(rendered_hashes[call["cwd"]], expected_hash)
 
-        job_ids, calibration_dirs = set(), set()
         jobs_root = self.root / "jobs" / self.batch_id
         for identity in self.identities[:4]:
-            student_job = jobs_root / job_key(identity)
-            bridge = read_json(student_job / "real_grading_bridge.json")
-            calibration_dir = Path(bridge["calibration_job"])
-            calibration_dirs.add(calibration_dir)
-            manifest = read_json(calibration_dir / "grading_input_manifest.json")
-            job_ids.add(manifest["job_id"])
-            parsed = read_json(calibration_dir / "parsed_result.json")
-            self.assertEqual(parsed["grading"]["student_id"], identity.student_id)
-            self.assertEqual((student_job / "source.pdf").read_bytes(),
-                             (self.source_dir / next(r["source_pdf"] for r in self.records
-                                                      if r["student_id"] == identity.student_id)).read_bytes())
-        self.assertEqual(len(job_ids), 4)
-        self.assertEqual(len(calibration_dirs), 4)
+            # Each essay had its own working folder, cleared once its row was saved.
+            self.assertEqual(working_state(jobs_root / job_key(identity)), [])
         rows = self.read_rows()
         self.assertEqual([row[1] for row in rows], ["01", "02", "03", "04"])
         self.assertEqual(len({row[1] for row in rows}), 4)
@@ -373,42 +361,6 @@ class RealBatchParallelTests(unittest.TestCase):
         self.assertEqual(self.identity_names_in_calls(offline).count(self.identities[3].student_name), 1)
         self.assertEqual([row[1] for row in self.read_rows()], ["01", "04", "02"])
 
-    def test_exhausted_model_attempt_gets_new_lineage_without_losing_old_evidence(self):
-        offline = OfflineCodexRunner(
-            self.identities[:2], fail_once={self.identities[1].student_name}
-        )
-        pipeline = self.make_pipeline(offline, "lineage-offline")
-        first = pipeline.run_real_batch(
-            self.records[:2], self.source_dir, model_profile="luna_xhigh"
-        )
-        self.assertEqual([item["identity"]["student_id"] for item in first["failed"]], ["02"])
-
-        failed_job = next(
-            (self.root / "jobs" / "lineage-offline").glob("student_02_*/student_record.json")
-        )
-        bridge = read_json(failed_job.parent / "real_grading_bridge.json")
-        old_calibration = Path(bridge["calibration_job"])
-        old_checkpoint_path = old_calibration / "student_record.json"
-        old_checkpoint = read_json(old_checkpoint_path)
-        old_checkpoint["live_request_attempts"] = 2
-        old_checkpoint_path.write_text(
-            json.dumps(old_checkpoint, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
-        retry = self.make_pipeline(offline, "lineage-offline").run_real_batch(
-            [self.records[1]], self.source_dir, model_profile="luna_xhigh",
-        )
-        self.assertEqual(len(retry["validated"]), 1)
-        self.assertTrue(old_calibration.is_dir())
-        current_bridge = read_json(failed_job.parent / "real_grading_bridge.json")
-        self.assertIn("_attempt_2_", Path(current_bridge["calibration_job"]).name)
-        self.assertNotEqual(Path(current_bridge["calibration_job"]), old_calibration)
-        lineage = read_json(failed_job.parent / "real_grading_attempts.json")
-        self.assertEqual([item["attempt"] for item in lineage["attempts"]], [1, 2])
-        self.assertEqual(lineage["attempts"][0]["calibration_job"], str(old_calibration))
-        self.assertEqual(lineage["attempts"][1]["state"], "VALIDATED")
-        self.assertEqual(len(offline.calls), 3)
-
     def test_persistence_failure_keeps_workbook_readable_and_continue_regrades_uncommitted_result(self):
         offline = OfflineCodexRunner(self.identities[:2])
         pipeline = self.make_pipeline(offline)
@@ -446,6 +398,7 @@ class RealBatchParallelTests(unittest.TestCase):
         )
         self.assertEqual(len(first["validated"]), 1)
         job_dir = self.root / "jobs" / self.batch_id / job_key(self.identities[0])
+        job_dir.mkdir(parents=True, exist_ok=True)
         (job_dir / "student_record.json").write_text("{", encoding="utf-8")
         (job_dir / "validated_result.json").write_text("not-json", encoding="utf-8")
         offline.calls.clear()

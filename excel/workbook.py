@@ -14,6 +14,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 
 from grading.schemas import CRITERIA, RATINGS, CriterionResult, Identity, ValidationError
+from workflow.storage import replace_file
 from .schema import AUDIT_HEADERS, AUDIT_SHEET, HEADERS, SHEET
 
 
@@ -164,7 +165,7 @@ class ExcelStore:
                 backups.mkdir(parents=True, exist_ok=True)
                 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
                 shutil.copy2(self.path, backups / f"{self.path.stem}-{stamp}.xlsx")
-            os.replace(temporary, self.path)
+            replace_file(temporary, self.path)
         finally:
             Path(temporary).unlink(missing_ok=True)
 

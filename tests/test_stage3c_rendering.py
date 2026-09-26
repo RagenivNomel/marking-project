@@ -46,7 +46,7 @@ def _forbid_grading_and_model_calls():
     with ExitStack() as stack:
         for owner, name in (
             (MockGrader, "grade"), (CodexSolGrader, "grade"), (SolGrader, "grade"),
-            (Pipeline, "run_mock"), (Pipeline, "run_real_pdf"), (Pipeline, "run_real_batch"),
+            (Pipeline, "run_mock"), (Pipeline, "_grade_essay"), (Pipeline, "run_real_batch"),
             (CalibrationPipeline, "prepare"), (CalibrationPipeline, "run"),
         ):
             stack.enter_context(patch.object(owner, name, side_effect=AssertionError(f"{owner.__name__}.{name} must not run in Stage 3C")))

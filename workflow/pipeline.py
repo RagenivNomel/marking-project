@@ -14,8 +14,7 @@ import time
 import traceback
 from typing import Callable
 
-from pypdf import PdfReader
-
+from excel.schema import AUDIT_SHEET, SHEET
 from excel.workbook import ExcelStore, roster_text
 from grading.grader import GradingInput
 from grading.mock_grader import MockGrader
@@ -28,6 +27,8 @@ from .storage import atomic_json, batch_lock, exclusive_lock, read_json
 
 
 MAX_CONCURRENT_GRADERS = 3
+# Diagnostic record of discarded unfinished attempts; never read by recovery.
+DISCARD_LOG = "discarded_attempts.log"
 
 
 def _marking_trace(message):
@@ -236,322 +237,56 @@ class Pipeline:
             job_dir.mkdir(parents=True, exist_ok=True)
             return self._render(identity, key, job_dir, checkpoint)
 
-    def _calibration_namespace_for_attempt(self, key):
-        """Give every unfinished prior attempt a fresh isolated child namespace."""
-        bridge_path = self.jobs_dir / key / "real_grading_bridge.json"
-        checkpoint_path = self.jobs_dir / key / "student_record.json"
-        if not bridge_path.is_file():
-            try:
-                checkpoint = read_json(checkpoint_path)
-                if checkpoint.get("state") not in {
-                        State.GRADED.value, State.VALIDATED.value,
-                        State.REVIEWED.value, State.APPROVED.value,
-                        State.RENDERED.value, State.COMPLETE.value}:
-                    return self.batch_id
-            except (OSError, ValueError, TypeError, AttributeError):
-                return self.batch_id
-        try:
-            lineage_path = self.jobs_dir / key / "real_grading_attempts.json"
-            lineage = read_json(lineage_path) if lineage_path.is_file() else {}
-            attempts = lineage.get("attempts", [])
-            next_number = max((int(item.get("attempt", 0)) for item in attempts), default=1) + 1
-        except (OSError, ValueError, TypeError, AttributeError):
-            next_number = 2
-        candidate_root = self.project_dir / "jobs"
-        key_suffix = key.removeprefix("student_")
-        while any(candidate_root.glob(
-                f"calibration_{self.batch_id}_attempt_{next_number}_{key_suffix}_*")):
-            next_number += 1
-        return f"{self.batch_id}_attempt_{next_number}"
+    def _discard_working_state(self, key, reason=None):
+        """Delete one essay's app-generated working files.
 
-    def _record_calibration_attempt(self, job_dir, key, namespace):
-        """Preserve prior calibration evidence before starting a fresh child."""
-        lineage_path = Path(job_dir) / "real_grading_attempts.json"
-        try:
-            lineage = read_json(lineage_path) if lineage_path.is_file() else {}
-        except (OSError, ValueError, TypeError):
-            lineage = {}
-        entries = list(lineage.get("attempts", [])) if isinstance(lineage, dict) else []
-        if not entries:
-            bridge_path = Path(job_dir) / "real_grading_bridge.json"
-            if bridge_path.is_file():
-                try:
-                    bridge = read_json(bridge_path)
-                    old_child = Path(bridge["calibration_job"])
-                    old_checkpoint = read_json(old_child / "student_record.json")
-                    report_path = old_child / "validation_report.json"
-                    old_report = read_json(report_path) if report_path.is_file() else {}
-                    entries.append({
-                        "attempt": 1,
-                        "calibration_job": str(old_child),
-                        "execution_namespace": bridge.get("execution_namespace"),
-                        "state": old_checkpoint.get("state"),
-                        "live_request_attempts": old_checkpoint.get("live_request_attempts", 0),
-                        "validation_status": old_report.get("status"),
-                    })
-                except (OSError, ValueError, TypeError, KeyError):
-                    pass
-        number = max((int(item.get("attempt", 0)) for item in entries), default=0) + 1
-        pending = {
-            "attempt": number,
-            "calibration_job": None,
-            "execution_namespace": namespace,
-            "state": "PENDING",
-        }
-        entries.append(pending)
-        atomic_json(lineage_path, {"schema_version": 1, "job_id": key, "attempts": entries})
-        return pending
-
-    def _bind_calibration_attempt(self, job_dir, pending, calibration_job):
-        lineage_path = Path(job_dir) / "real_grading_attempts.json"
-        try:
-            lineage = read_json(lineage_path)
-            for entry in lineage.get("attempts", []):
-                if entry.get("attempt") == pending.get("attempt"):
-                    entry["calibration_job"] = str(calibration_job)
-                    entry["state"] = "IN_PROGRESS"
-                    break
-            atomic_json(lineage_path, lineage)
-        except (OSError, ValueError, TypeError, AttributeError):
-            # The checkpoint and bridge remain authoritative if the optional
-            # lineage index cannot be updated.
-            return
-
-    def _finish_calibration_attempt(self, job_dir, calibration_job, state):
-        lineage_path = Path(job_dir) / "real_grading_attempts.json"
-        try:
-            lineage = read_json(lineage_path)
-            for entry in lineage.get("attempts", []):
-                if entry.get("calibration_job") == str(calibration_job):
-                    entry["state"] = state
-                    break
-            atomic_json(lineage_path, lineage)
-        except (OSError, ValueError, TypeError, AttributeError):
-            return
-
-    def run_real_pdf(self, source_pdf, identity: Identity, essay_question=None, model_profile=None,
-                     *, allow_second_live_attempt=False, persist_workbook=True,
-                     execution_namespace=None, fresh_attempt=False, timing_callback=None):
-        """Bridge one isolated real-PDF grading job into the production workbook.
-
-        The existing calibration pipeline remains responsible for Codex isolation,
-        prompt/rubric snapshots, structured validation and its one-attempt guard.
-        This method only binds its validated grading result to the batch workbook;
-        real jobs stop at VALIDATED/PENDING and never auto-approve or render.
+        Only ``jobs/<task>/<essay>/`` is touched, and its ``output/`` folder of
+        feedback-card evidence is kept. The workbook, source scans and identity
+        decisions live elsewhere and are never recovery scope. When a reason is
+        given the discard is logged; the log is diagnostic and never read back.
         """
-        source_pdf = Path(source_pdf).resolve()
-        if not source_pdf.is_file() or source_pdf.suffix.lower() != ".pdf":
-            raise ValidationError("One existing PDF source is required")
-        source_bytes = source_pdf.read_bytes()
-        page_count = len(PdfReader(source_pdf).pages)
-        if page_count < 1:
-            raise ValidationError("Source PDF has no pages")
-        model_catalog = read_json(self.config_dir / "calibration_model.json")
-        profiles = model_catalog.get("profiles", {})
-        profile = model_profile or model_catalog.get("active_profile")
-        if profile not in profiles:
-            raise ValidationError(f"Unknown calibration model profile: {profile}")
-        digest = fingerprint({
-            "identity": identity.to_dict(),
-            "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
-            "essay_question": essay_question,
-            "model_profile": profile,
-        })
-        key = job_key(identity)
-        job_dir = self.jobs_dir / key
-        checkpoint_path = job_dir / "student_record.json"
-        calibration_namespace = execution_namespace or self.batch_id
-        # A distinct lock per student preserves restart safety without holding
-        # sibling students behind another student's blocking model call.
-        with batch_lock(self.jobs_dir / f".{key}.pipeline.lock"):
-            job_dir.mkdir(parents=True, exist_ok=True)
-            if checkpoint_path.exists():
-                checkpoint = read_json(checkpoint_path)
-                if (checkpoint.get("input_digest") != digest
-                        or checkpoint.get("workbook") != str(self.excel.path)
-                        or checkpoint.get("identity") != identity.to_dict()):
-                    raise ValidationError("Existing real batch job belongs to different input or configuration")
+        essay_dir = self.jobs_dir / key
+        if not essay_dir.is_dir():
+            return []
+        discarded = []
+        for child in sorted(essay_dir.iterdir()):
+            if child.name == "output":
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
             else:
-                checkpoint = dict(
-                    schema_version=2,
-                    mode="REAL_PDF_BATCH",
-                    job_id=key,
-                    identity=identity.to_dict(),
-                    input_digest=digest,
-                    source_sha256=hashlib.sha256(source_bytes).hexdigest(),
-                    source_page_count=page_count,
-                    model_profile=profile,
-                    execution_namespace=self.batch_id,
-                    workbook=str(self.excel.path),
-                    state=State.NEW.value,
-                    history=[State.NEW.value],
-                    last_error=None,
-                )
-                atomic_json(checkpoint_path, checkpoint)
+                child.unlink()
+            discarded.append(child.name)
+        if discarded and reason:
+            _marking_trace(f"discarded student={key} reason={reason} files={discarded}")
             try:
-                state = State(checkpoint["state"])
-                if fresh_attempt and state not in (State.NEW, State.SCANNED, State.IDENTIFIED, State.TRANSCRIBED):
-                    # A prior model/validation attempt is disposable when no
-                    # authoritative workbook row exists.  Reset only the
-                    # parent activity cursor; the isolated child and optional
-                    # attempt lineage remain available as audit evidence.
-                    checkpoint["state"] = State.TRANSCRIBED.value
-                    checkpoint["history"] = [
-                        State.NEW.value, State.SCANNED.value,
-                        State.IDENTIFIED.value, State.TRANSCRIBED.value,
-                    ]
-                    checkpoint["last_error"] = None
-                    atomic_json(checkpoint_path, checkpoint)
-                if state == State.NEW:
-                    shutil.copyfile(source_pdf, job_dir / "source.pdf")
-                    atomic_json(job_dir / "source.json", {
-                        "mode": "real-pdf",
-                        "source_original_path": str(source_pdf),
-                        "source_sha256": checkpoint["source_sha256"],
-                        "page_count": page_count,
-                    })
-                    self._advance(job_dir, checkpoint, State.SCANNED)
-                if State(checkpoint["state"]) == State.SCANNED:
-                    atomic_json(job_dir / "identity.json", {"method": "explicit-batch-input", **identity.to_dict()})
-                    self._advance(job_dir, checkpoint, State.IDENTIFIED)
-                if State(checkpoint["state"]) == State.IDENTIFIED:
-                    atomic_json(job_dir / "essay.json", {
-                        "method": "direct_pdf",
-                        "page_count": page_count,
-                        "essay_question": essay_question,
-                    })
-                    self._advance(job_dir, checkpoint, State.TRANSCRIBED)
-                if State(checkpoint["state"]) == State.TRANSCRIBED:
-                    if self.real_pipeline_factory is None:
-                        from workflow.calibration_pipeline import CalibrationPipeline
-                        real_pipeline = CalibrationPipeline(self.project_dir, config_dir=self.config_dir, model_profile=profile)
-                    else:
-                        real_pipeline = self.real_pipeline_factory(self.project_dir, model_profile=profile)
-                    lineage_entry = None
-                    if calibration_namespace != self.batch_id:
-                        lineage_entry = self._record_calibration_attempt(
-                            job_dir, key, calibration_namespace
-                        )
-                    # Persist the parent-to-calibration link before the external
-                    # call so Stage 1 can inspect an interrupted/failed attempt.
-                    calibration_job, _calibration_output, _calibration_checkpoint = real_pipeline.prepare(
-                        source_pdf, identity, essay_question, execution_namespace=calibration_namespace
-                    )
-                    if lineage_entry is not None:
-                        self._bind_calibration_attempt(job_dir, lineage_entry, calibration_job)
-                    atomic_json(job_dir / "real_grading_bridge.json", {
-                        "calibration_job": str(calibration_job),
-                        "execution_namespace": self.batch_id,
-                        "calibration_attempt_namespace": calibration_namespace,
-                        "status": "IN_PROGRESS",
-                    })
-                    bridge_result = real_pipeline.run(
-                        source_pdf, identity, essay_question,
-                        allow_second_live_attempt=allow_second_live_attempt,
-                        execution_namespace=calibration_namespace,
-                        timing_callback=timing_callback,
-                    )
-                    if lineage_entry is not None:
-                        self._finish_calibration_attempt(
-                            job_dir,
-                            bridge_result.get("job_dir", calibration_job),
-                            bridge_result.get("state", "UNKNOWN"),
-                        )
-                    if bridge_result.get("state") not in (State.VALIDATED.value, State.GRADED.value):
-                        raise ValidationError("Isolated real grader did not produce a validated grading result")
-                    calibration_job = Path(bridge_result["job_dir"])
-                    parsed_path = calibration_job / "parsed_result.json"
-                    parsed = read_json(parsed_path)
-                    if bridge_result.get("state") == State.GRADED.value or parsed.get("grading") is None:
-                        atomic_json(job_dir / "reading_quality.json", parsed.get("reading_quality", {}))
-                        atomic_json(job_dir / "real_grading_bridge.json", {
-                            "calibration_job": str(calibration_job),
-                            "execution_namespace": self.batch_id,
-                            "calibration_attempt_namespace": calibration_namespace,
-                            "status": "MATERIAL_READING_UNCERTAINTY",
-                        })
-                        return {"state": State.TRANSCRIBED.value, "job_id": key, "job_dir": str(job_dir), "workbook": None}
-                    atomic_json(job_dir / "grading_result.json", parsed["grading"])
-                    atomic_json(job_dir / "real_grading_bridge.json", {
-                        "calibration_job": str(calibration_job),
-                        "execution_namespace": self.batch_id,
-                        "calibration_attempt_namespace": calibration_namespace,
-                        "parsed_result": str(parsed_path),
-                        "validation_report": str(calibration_job / "validation_report.json"),
-                        "reading_quality": parsed.get("reading_quality", {}),
-                        "evidence": parsed.get("evidence", []),
-                    })
-                    self._advance(job_dir, checkpoint, State.GRADED)
-                if State(checkpoint["state"]) == State.GRADED:
-                    result = self.validator.validate(read_json(job_dir / "grading_result.json"), identity)
-                    atomic_json(job_dir / "validated_result.json", result.to_dict())
-                    self._advance(job_dir, checkpoint, State.VALIDATED)
-                if State(checkpoint["state"]) == State.VALIDATED:
-                    result = self.validator.validate(read_json(job_dir / "validated_result.json"), identity)
-                    if timing_callback is not None:
-                        timing_callback("validation_finish")
-                    outcome = {
-                        "state": State.VALIDATED.value,
-                        "job_id": key,
-                        "job_dir": str(job_dir),
-                        "workbook": str(self.excel.path),
-                    }
-                    if not persist_workbook:
-                        return outcome
-                    review_status = self._persist_real_result(result, identity, key, digest, essay_question or "")
-                    outcome["review_status"] = review_status
-                    if timing_callback is not None:
-                        timing_callback("persistence_finish")
-                    return outcome
-                raise ValidationError(f"Real batch cannot continue from {checkpoint['state']}")
-            except Exception as exc:
-                durable = read_json(checkpoint_path)
-                durable["last_error"] = {"type": type(exc).__name__, "message": str(exc)}
-                atomic_json(checkpoint_path, durable)
-                raise
-
-    def _persist_real_result(self, result, identity, key, digest, topic, *,
-                             writer_started=None, writer_finished=None):
-        """Use the authoritative ExcelStore merge path for one validated row."""
-        attempt_path = self.jobs_dir / key / "workbook_persistence.json"
-        attempt = {
-            "schema_version": 1,
-            "job_id": key,
-            "identity": identity.to_dict(),
-            "input_digest": digest,
-            "workbook": str(self.excel.path.resolve()),
-            "status": "PENDING",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        atomic_json(attempt_path, attempt)
-        if writer_started is not None:
-            writer_started()
-        try:
-            self.excel.ensure_draft(result, identity, key, digest, topic)
-            review_status = self.excel.get(key, identity).review_status
-        except Exception as exc:
-            attempt.update({
-                "status": "FAILED",
-                "error": {"type": type(exc).__name__, "message": str(exc)},
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            })
-            try:
-                atomic_json(attempt_path, attempt)
-            except Exception:
-                # The receipt is diagnostic only; the workbook row and audit
-                # are the authoritative commit evidence.
+                with (self.jobs_dir / DISCARD_LOG).open("a", encoding="utf-8") as log:
+                    log.write(f"{datetime.now(timezone.utc).isoformat()}\t{key}\t{reason}\t{','.join(discarded)}\n")
+            except OSError:
                 pass
-            raise
-        finally:
-            if writer_finished is not None:
-                writer_finished()
-        attempt.update({
-            "status": "SAVED",
-            "review_status": review_status,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
-        atomic_json(attempt_path, attempt)
-        return review_status
+        return discarded
+
+    def _grade_essay(self, source_pdf, identity, essay_question, profile, timing_callback=None):
+        """Mark one essay from scratch in a fresh working folder.
+
+        Every grader file (prompt snapshots, model response, per-call checks)
+        stays inside ``work/``, so discarding the essay folder removes the
+        whole attempt. Returns the validated result; nothing is saved here.
+        """
+        work_dir = self.jobs_dir / job_key(identity) / "work"
+        work_dir.mkdir(parents=True)
+        if self.real_pipeline_factory is None:
+            from workflow.calibration_pipeline import CalibrationPipeline
+            grader = CalibrationPipeline(work_dir, config_dir=self.config_dir, model_profile=profile)
+        else:
+            grader = self.real_pipeline_factory(work_dir, model_profile=profile)
+        outcome = grader.run(source_pdf, identity, essay_question, timing_callback=timing_callback)
+        if outcome.get("state") == State.GRADED.value:
+            raise ValidationError("The essay could not be read clearly enough to mark; check the scan")
+        if outcome.get("state") != State.VALIDATED.value:
+            raise ValidationError("The grader did not produce a validated result")
+        parsed = read_json(Path(outcome["job_dir"]) / "parsed_result.json")
+        return self.validator.validate(parsed["grading"], identity)
 
     def run_real_batch(self, records, source_dir, *, limit=None, essay_question=None, model_profile=None,
                        progress_callback=None, cancelled=None):
@@ -565,9 +300,18 @@ class Pipeline:
 
     def _run_real_batch_locked(self, records, source_dir, *, limit=None, essay_question=None, model_profile=None,
                                progress_callback=None, cancelled=None):
-        """Grade independently, then persist validated rows in intake order."""
+        """Grade independently, then save each result row in intake order.
+
+        An essay is done only when the workbook holds its valid result and
+        audit rows. Every other essay is marked from scratch after its old
+        working files are discarded; nothing is resumed mid-attempt.
+        """
         if limit is not None and (type(limit) is not int or limit <= 0):
             raise ValidationError("Batch limit must be a positive integer")
+        model_catalog = read_json(self.config_dir / "calibration_model.json")
+        profile = model_profile or model_catalog.get("active_profile")
+        if profile not in model_catalog.get("profiles", {}):
+            raise ValidationError(f"Unknown calibration model profile: {profile}")
         source_dir = Path(source_dir).resolve()
         records = list(records)
         def ordering(item):
@@ -618,17 +362,6 @@ class Pipeline:
                 elif event == "grading_finish":
                     active_graders = max(0, active_graders - 1)
 
-        def writer_started():
-            nonlocal active_writers, max_active_writers
-            with timing_guard:
-                active_writers += 1
-                max_active_writers = max(max_active_writers, active_writers)
-
-        def writer_finished():
-            nonlocal active_writers
-            with timing_guard:
-                active_writers = max(0, active_writers - 1)
-
         def report(active_count=0, current="", *, interrupted=False):
             nonlocal last_remaining_not_started
             completed_count = len(existing) + len(validated)
@@ -651,50 +384,71 @@ class Pipeline:
             }
             progress_callback(payload)
 
-        # Reconstruct durable completions before showing progress. A completion
-        # requires the authoritative workbook row, audit identity, digest, and
-        # committed status. Approved rows count as complete too.
+        # Done essays come only from the workbook. Their leftover working
+        # files, if any, are cleared; every other essay becomes work.
         for record in selected:
             identity = Identity.from_dict({key: record[key] for key in ("student_id", "student_name", "class_name")})
             identity_key = (identity.class_name, identity.student_id)
             if identity_key in seen:
                 raise ValidationError(f"Duplicate selected student: {identity_key}")
             seen.add(identity_key)
-            source_pdf = source_dir / str(record["source_pdf"])
-            if self._real_result_is_durable(source_pdf, identity, essay_question, model_profile):
-                existing.add(job_key(identity))
-        report()
-
-        for record in selected:
-            identity = Identity.from_dict({key: record[key] for key in ("student_id", "student_name", "class_name")})
-            source_pdf = source_dir / str(record["source_pdf"])
             key = job_key(identity)
-            if key in existing:
-                continue
-            work_items.append({
-                "index": len(work_items), "record": record, "identity": identity,
-                "source_pdf": source_pdf, "job_id": key,
-            })
+            state = self._workbook_state(identity)
+            if state == "saved":
+                existing.add(key)
+                try:
+                    self._discard_working_state(key, "already saved in workbook")
+                except OSError as exc:
+                    _marking_trace(f"cleanup failed student={key} {type(exc).__name__}: {exc}")
+            elif state == "damaged":
+                # Rows are never overwritten, so marking again could not save.
+                failed.append({"identity": identity.to_dict(),
+                               "source_pdf": str(source_dir / str(record["source_pdf"])),
+                               "error": {"type": "ValidationError", "message": (
+                                   "The workbook already has a row for this student that needs checking; "
+                                   "it was not changed and the essay was not marked again")}})
+            else:
+                work_items.append({
+                    "index": len(work_items), "record": record, "identity": identity,
+                    "source_pdf": source_dir / str(record["source_pdf"]), "job_id": key,
+                })
+        report()
 
         def grade_one(item):
             key = item["job_id"]
-            calibration_namespace = self._calibration_namespace_for_attempt(key)
             identity = item["identity"]
             label = f"{identity.class_name} · {identity.student_id} · {identity.student_name}"
             _marking_trace(f"start student={label}")
-            result = self.run_real_pdf(
-                item["source_pdf"], identity, essay_question, model_profile,
-                persist_workbook=False,
-                execution_namespace=calibration_namespace,
-                fresh_attempt=(calibration_namespace != self.batch_id),
+            self._discard_working_state(key, "not saved in workbook; marking again from scratch")
+            source_pdf = Path(item["source_pdf"]).resolve()
+            digest = fingerprint({
+                "identity": identity.to_dict(),
+                "source_sha256": hashlib.sha256(source_pdf.read_bytes()).hexdigest(),
+                "essay_question": essay_question,
+                "model_profile": profile,
+            })
+            result = self._grade_essay(
+                source_pdf, identity, essay_question, profile,
                 timing_callback=lambda event: record_timing(key, event),
             )
-            _marking_trace(f"grader returned student={label} state={result.get('state')}")
-            return result
+            record_timing(key, "validation_finish")
+            _marking_trace(f"grader returned student={label}")
+            return result, digest
 
         def display(item):
             identity = item["identity"]
             return f"{identity.class_name} · {identity.student_id} · {identity.student_name}"
+
+        def fail(item, exc, stage):
+            _marking_trace(f"{stage} failed={item['job_id']} {type(exc).__name__}: {exc}")
+            if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
+                traceback.print_exception(exc, file=sys.stderr)
+            failed.append({"identity": item["identity"].to_dict(), "source_pdf": str(item["source_pdf"]),
+                           "error": {"type": type(exc).__name__, "message": str(exc)}})
+            try:
+                self._discard_working_state(item["job_id"], f"{stage} failed: {type(exc).__name__}")
+            except OSError as cleanup_error:
+                _marking_trace(f"cleanup failed student={item['job_id']} {cleanup_error}")
 
         timing_started_at = batch_started_at.isoformat()
 
@@ -729,47 +483,45 @@ class Pipeline:
                     try:
                         buffered[item["index"]] = (item, future.result(), None)
                     except Exception as exc:
-                        _marking_trace(f"student failed={item['job_id']} {type(exc).__name__}: {exc}")
-                        if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
-                            traceback.print_exc(file=sys.stderr)
                         buffered[item["index"]] = (item, None, exc)
 
-                # A returned validated result is still in progress until the
-                # ordered workbook write succeeds.
+                # A graded result is still in progress until its workbook
+                # row is saved; only that save makes the essay done.
                 report(len(pending) + len(buffered), current_work(), interrupted=stopped_early)
 
                 while next_to_persist in buffered:
-                    item, result, error = buffered.pop(next_to_persist)
+                    item, graded, error = buffered.pop(next_to_persist)
                     next_to_persist += 1
-                    identity = item["identity"]
                     if error is not None:
-                        failed.append({"identity": identity.to_dict(), "source_pdf": str(item["source_pdf"]),
-                                       "error": {"type": type(error).__name__, "message": str(error)}})
-                    elif result.get("state") != State.VALIDATED.value:
-                        failed.append({"identity": identity.to_dict(), "source_pdf": str(item["source_pdf"]),
-                                       "state": result.get("state"), "error": "grading was not validated"})
-                    else:
+                        fail(item, error, "marking")
+                        continue
+                    identity = item["identity"]
+                    grading, digest = graded
+                    try:
+                        with timing_guard:
+                            active_writers += 1
+                            max_active_writers = max(max_active_writers, active_writers)
                         try:
-                            job_dir = Path(result["job_dir"])
-                            checkpoint = read_json(job_dir / "student_record.json")
-                            grading = self.validator.validate(
-                                read_json(job_dir / "validated_result.json"), identity
-                            )
-                            record_timing(item["job_id"], "validation_finish")
-                            review_status = self._persist_real_result(
-                                grading, identity, item["job_id"], checkpoint["input_digest"],
-                                essay_question or "", writer_started=writer_started,
-                                writer_finished=writer_finished,
-                            )
-                            record_timing(item["job_id"], "persistence_finish")
-                            validated.append({"identity": identity.to_dict(), **result,
-                                              "review_status": review_status})
-                        except Exception as exc:
-                            _marking_trace(f"persistence failed={item['job_id']} {type(exc).__name__}: {exc}")
-                            if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
-                                traceback.print_exc(file=sys.stderr)
-                            failed.append({"identity": identity.to_dict(), "source_pdf": str(item["source_pdf"]),
-                                           "error": {"type": type(exc).__name__, "message": str(exc)}})
+                            self.excel.ensure_draft(grading, identity, item["job_id"], digest, essay_question or "")
+                            if self._workbook_state(identity) != "saved":
+                                raise ValidationError("The result row could not be verified in the workbook after saving")
+                            review_status = self.excel.get(item["job_id"], identity).review_status
+                        finally:
+                            with timing_guard:
+                                active_writers = max(0, active_writers - 1)
+                    except Exception as exc:
+                        fail(item, exc, "saving")
+                        continue
+                    record_timing(item["job_id"], "persistence_finish")
+                    validated.append({"identity": identity.to_dict(), "state": State.VALIDATED.value,
+                                      "job_id": item["job_id"], "workbook": str(self.excel.path),
+                                      "review_status": review_status})
+                    try:
+                        self._discard_working_state(item["job_id"])
+                    except OSError as exc:
+                        # The saved row is the completion; leftovers are
+                        # cleared on the next run.
+                        _marking_trace(f"cleanup failed student={item['job_id']} {exc}")
 
                 if cancelled is not None and cancelled() and next_to_submit < len(work_items):
                     stopped_early = True
@@ -805,7 +557,7 @@ class Pipeline:
             "validated": validated,
             "failed": failed,
             "workbook": str(self.excel.path) if validated or existing else None,
-            "model_profile": model_profile,
+            "model_profile": profile,
             "already_complete": len(existing),
             "interrupted": stopped_early,
             "remaining_not_started": last_remaining_not_started,
@@ -815,32 +567,46 @@ class Pipeline:
         report(0, "", interrupted=stopped_early)
         return outcome
 
-    def _real_result_is_durable(self, source_pdf, identity, essay_question, model_profile):
-        """Return DONE only for a valid authoritative workbook/audit commit."""
+    def _workbook_state(self, identity):
+        """Return "saved", "missing" or "damaged" for this essay's workbook row.
+
+        "saved" (DONE) needs a valid result row plus its matching audit row.
+        "damaged" means the workbook holds some row or audit entry for the
+        student that is not a valid pair; it is left for the teacher to check.
+        """
         key = job_key(identity)
         if not self.excel.path.is_file():
-            return False
+            return "missing"
+        student = (identity.class_name, identity.student_id)
         try:
             book = self.excel._open()
+        except Exception:
+            return "damaged"
+        try:
+            audits = [audit for audit in book[AUDIT_SHEET].iter_rows(min_row=2)
+                      if audit[0].value == key
+                      or (roster_text(audit[1].value), roster_text(audit[2].value)) == student]
+            rows = [row for row in book[SHEET].iter_rows(min_row=2)
+                    if (roster_text(row[0].value), roster_text(row[1].value)) == student]
+            if not audits and not rows:
+                return "missing"
             try:
                 row, audit = self.excel._row(book, key)
-                if row is None or audit is None:
-                    return False
-                if audit[0].value != key:
-                    return False
-                if (roster_text(audit[1].value), roster_text(audit[2].value)) != (
-                        identity.class_name, identity.student_id):
-                    return False
+                if (row is None or audit is None or len(audits) != 1 or len(rows) != 1
+                        or row[0].row != rows[0][0].row):
+                    return "damaged"
+                if (roster_text(audit[1].value), roster_text(audit[2].value)) != student:
+                    return "damaged"
                 if audit[3].value != row[0].row:
-                    return False
+                    return "damaged"
                 digest = audit[4].value
                 if not isinstance(digest, str) or not digest.strip():
-                    return False
+                    return "damaged"
                 if audit[5].value not in {"VALIDATED", "REVIEWED", "APPROVED", "RENDERED", "COMPLETE"}:
-                    return False
+                    return "damaged"
                 record = self.excel._decode(row, identity)
-            finally:
-                book.close()
-            return record.review_status in ("PENDING", "APPROVED")
-        except Exception:
-            return False
+            except Exception:
+                return "damaged"
+            return "saved" if record.review_status in ("PENDING", "APPROVED") else "damaged"
+        finally:
+            book.close()

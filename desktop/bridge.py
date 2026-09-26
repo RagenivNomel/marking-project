@@ -482,12 +482,18 @@ class DesktopBridge(QObject):
                 "saved": (f"{saved} committed result(s) are saved." if self._language == "en"
                           else f"已保存{saved}份已提交结果。"),
             }
-            if error and not self._state["attention"] and summary["marking_available"] > 0:
+            startup_problem = error
+            if not error and failures and not result.get("validated"):
+                # Every essay failed and nothing was saved: report it as a
+                # failed start rather than quietly returning to "ready".
+                first = result["failed"][0].get("error")
+                startup_problem = first.get("message") if isinstance(first, dict) else str(first)
+            if startup_problem and not self._state["attention"] and summary["marking_available"] > 0:
                 self._state["attention"].append(dict(
                     title="This assignment" if self._language == "en" else "这次任务",
                     message=("Marking could not start. Your essays are still ready; check the details before continuing."
                              if self._language == "en" else "批改未能开始，作文仍已准备好；请查看详情后继续。"),
-                    details=f"MARKING_STARTUP_FAILED\n{error}",
+                    details=f"MARKING_STARTUP_FAILED\n{startup_problem}",
                 ))
             self._state["teacherFlow"] = derive_teacher_flow(self._state, self._language)
             step = self._state["teacherFlow"]["step"]

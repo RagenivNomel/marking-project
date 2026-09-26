@@ -23,9 +23,26 @@ def atomic_json(path, data):
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        replace_file(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def replace_file(source, target, attempts=20, delay=0.05):
+    """``os.replace`` retried while Windows reports the file as busy.
+
+    Antivirus and the search indexer briefly open newly written files, and
+    Windows then refuses the rename with PermissionError. Each retry is the
+    same single atomic rename, so a reader never sees a partial file.
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == attempts - 1:
+                raise
+            time.sleep(delay)
 
 
 def lock_owner_is_alive(path):

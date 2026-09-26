@@ -21,12 +21,3 @@ def teacher_output_paths(task_root: Path) -> TaskOutputPaths:
         feedback_cards_directory=results / "Feedback Cards",
     )
 
-
-def legacy_output_paths(project_dir: Path, batch_id: str) -> TaskOutputPaths:
-    """Describe the pre-product-completion layout without moving its files."""
-    results = Path(project_dir).expanduser().resolve() / "output" / batch_id
-    return TaskOutputPaths(
-        results_directory=results,
-        workbook=results / "results.xlsx",
-        feedback_cards_directory=results / "Feedback Cards",
-    )
