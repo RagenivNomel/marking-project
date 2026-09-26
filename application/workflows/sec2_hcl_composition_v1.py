@@ -11,7 +11,10 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from hashlib import sha256
+import os
 from pathlib import Path
+import shutil
+from uuid import uuid4
 
 from openpyxl import load_workbook
 
@@ -92,22 +95,48 @@ class CompositionWorkflow:
             raise ValidationError("Choose a continuous-scan PDF")
 
         workdir = self._scan_workdir(scan)
-        if workdir.exists():
-            try:
-                master = workdir / "_continuous.pdf"
-                if not master.is_file() or _hash(master) != _hash(scan):
-                    raise ValidationError("The generated continuous-PDF copy does not match the selected scan")
-                read_existing_split(workdir)
-            except Exception as exc:
-                raise ValidationError(
-                    f"The app-owned scan workspace is incomplete or invalid: {workdir}: {exc}"
-                ) from exc
+        if not workdir.exists():
+            self._build_workdir(scan, workdir)
         else:
-            split_continuous_anonymous(scan, workdir)
-            if _hash(workdir / "_continuous.pdf") != _hash(scan):
+            self._check_workdir(scan, workdir)
+        return replace(source, split_pile=workdir)
+
+    @staticmethod
+    def _check_workdir(scan: Path, workdir: Path) -> None:
+        try:
+            master = workdir / "_continuous.pdf"
+            if not master.is_file() or _hash(master) != _hash(scan):
                 raise ValidationError("The generated continuous-PDF copy does not match the selected scan")
             read_existing_split(workdir)
-        return replace(source, split_pile=workdir)
+        except Exception as exc:
+            raise ValidationError(
+                f"The app-owned scan workspace is incomplete or invalid: {workdir}: {exc}"
+            ) from exc
+
+    @classmethod
+    def _build_workdir(cls, scan: Path, workdir: Path) -> None:
+        """Split into a temporary folder and rename it only once it is complete.
+
+        An interrupted split leaves only a ``.partial-`` folder, which the next
+        attempt removes, so ``workdir`` never exists half-built.
+        """
+        for stale in workdir.parent.glob(f"{workdir.name}.partial-*"):
+            shutil.rmtree(stale, ignore_errors=True)
+        partial = workdir.with_name(f"{workdir.name}.partial-{os.getpid()}-{uuid4().hex[:8]}")
+        try:
+            split_continuous_anonymous(scan, partial)
+            if _hash(partial / "_continuous.pdf") != _hash(scan):
+                raise ValidationError("The generated continuous-PDF copy does not match the selected scan")
+            read_existing_split(partial)
+            try:
+                partial.rename(workdir)
+            except OSError:
+                if not workdir.exists():
+                    raise
+                # Another window finished the same scan first; use its folder.
+                cls._check_workdir(scan, workdir)
+        finally:
+            shutil.rmtree(partial, ignore_errors=True)
 
     @staticmethod
     def marking_batch_id(source: AssignmentSource) -> str:
