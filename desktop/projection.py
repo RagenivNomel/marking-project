@@ -1,4 +1,6 @@
 """Transient bilingual presentation of Stage 1 models; no new assessment authority."""
+import re
+
 from application.models import Inspection, AssignmentSource
 from desktop.teacher_flow import derive_teacher_flow
 from application.workflows.task_storage import task_output_paths
@@ -113,6 +115,14 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
         # Skipped essays are saved beside the scan to be opened as their own task.
         subtitle += (f' · {len(inspection.skipped)} skipped (saved in the 跳过的作文 folder next to the scan)'
                      if en else f' · 另有{len(inspection.skipped)}份已跳过（已另存到扫描文件旁的“跳过的作文”文件夹）')
+    skipped_essays = []
+    for path in inspection.skipped:
+        number = re.search(r"作文(\d+)\.pdf$", path)
+        number = number.group(1) if number else ''
+        skipped_essays.append(dict(
+            path=path,
+            label=(f'Mark skipped essay {number}'.strip() if en else f'批改跳过的作文 {number}'.strip()),
+        ))
     notice = ('Local assignment · Saved files were checked; marking is not running.'
               if en else '本地作文任务 · 已检查保存的资料；当前没有运行批改。')
     state = dict(demo=False, scenario='real', view='workspace', section=2, title=title,
@@ -122,6 +132,7 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
                  resultsWorkbookAvailable=results_available,
                  feedbackCardsDirectory=str(feedback_cards_dir) if feedback_cards_dir else '',
                  feedbackCardsAvailable=feedback_available,
+                skippedEssays=skipped_essays,
                 fileReferences=references, summary=summary, rows=rows, attention=attention,
                 hero={}, progress={}, reducedMotion=False, hasSource=source is not None,
                 inspectedAt='', disabledReason=DISABLED_REASONS[language], sections=list(SECTIONS[language]),

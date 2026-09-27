@@ -376,6 +376,24 @@ class DesktopBridge(QObject):
         if self._source is not None and not self._state['demo']:
             self.inspect_source(self._source, refresh=True)
 
+    @Slot(str)
+    def openSkippedEssay(self, path):
+        """Open one of this task's skipped essays as its own task, same roster."""
+        if self._busy or self._source is None or self._state.get('demo'):
+            return
+        listed = {item.get('path') for item in self._state.get('skippedEssays') or ()}
+        essay = Path(path) if path in listed else None
+        if essay is None or not essay.is_file():
+            self._state['notice'] = ('The skipped essay could not be found.' if self._language == 'en'
+                                     else '找不到这份跳过的作文。')
+            self.changed.emit()
+            return
+        self.inspect_source(AssignmentSource(
+            continuous_scan=essay, roster=self._source.roster,
+            roster_sheet=self._source.roster_sheet, roster_class=self._source.roster_class,
+            config_dir=self._source.config_dir,
+        ))
+
     def _open_managed_path(self, value, *, folder):
         path = Path(value).expanduser() if value else None
         valid = bool(path and (path.is_dir() if folder else path.is_file()))

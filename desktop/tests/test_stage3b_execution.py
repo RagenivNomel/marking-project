@@ -266,6 +266,8 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         flow = derive_teacher_flow(inspection)
         self.assertEqual((flow["step"], flow["primaryAction"]), ("ready_to_mark", "RUN_MARKING"))
         self.assertIn("另有1份已跳过", project(inspection, source)["subtitle"])
+        self.assertEqual(project(inspection, source)["skippedEssays"],
+                         [{"path": str(copy), "label": "批改跳过的作文 002"}])
 
         result = self.controller.execute(Action.RUN_MARKING, source)
         self.assertEqual([item["identity"]["student_id"] for item in result["result"]["validated"]], ["01"])

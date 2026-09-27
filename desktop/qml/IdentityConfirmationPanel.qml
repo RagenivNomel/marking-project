@@ -28,11 +28,12 @@ Item {
         selections = next
         selectionVersion++
     }
-    // Dropdown choices: every roster student, then "skip this essay".
+    // Dropdown choices: "skip this essay" first, so it is easy to find, then
+    // every roster student.
     function skipKey() { return String((review.skipOption || {}).key || "") }
     function choices() {
         var list = (review.roster || []).slice()
-        if (review.skipOption) list.push(review.skipOption)
+        if (review.skipOption) list.unshift(review.skipOption)
         return list
     }
     function rosterItem(key) {
