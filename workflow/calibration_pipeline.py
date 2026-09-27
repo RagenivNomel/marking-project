@@ -75,8 +75,8 @@ class CalibrationPipeline:
             raise ValidationError("Calibration criteria configuration changed")
         if (self.rubric["rubric_version"] != self.model_config["rubric_version"]
                 or self.rubric["criteria"] != list(CRITERIA)
-                or self.rubric["numeric_score"]["available"] is not False):
-            raise ValidationError("Calibration rubric must use the approved criteria and no invented score")
+                or self.rubric["numeric_score"]["available"] is not True):
+            raise ValidationError("Calibration rubric must use the approved criteria and declare the suggested scores")
         if self.model_config.get("reference_version") != "reference-example-v1" or not self.reference_path.is_file():
             raise ValidationError("Versioned feedback reference is unavailable")
 

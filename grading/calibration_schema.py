@@ -1,5 +1,6 @@
 """Structured contract for blind real-essay calibration responses."""
 from dataclasses import asdict, dataclass
+import re
 from typing import Any
 
 from .schemas import CRITERIA, RATINGS, CriterionResult, Identity, ValidationError, exact_keys, required_text
@@ -7,6 +8,9 @@ from .schemas import CRITERIA, RATINGS, CriterionResult, Identity, ValidationErr
 READING_UNCERTAINTY_MAX = 200
 EVIDENCE_RATIONALE_MAX = 240
 EVIDENCE_JUDGMENTS = CRITERIA + ("教师总评",)
+SECTION_SCORE_MAX = 30
+SCORE_KEYS = ("content_score", "language_structure_score")
+QUESTION_NUMBER_PATTERN = re.compile(r"^Q[1-9][0-9]*$")
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,8 @@ class CalibrationResponse:
     reading_quality: ReadingQuality
     grading: CalibrationGrade | None
     evidence: tuple[EvidenceReference, ...]
+    question_number: str | None = None
+    scores: dict[str, int] | None = None
 
     def to_dict(self):
         return asdict(self)
@@ -106,6 +112,15 @@ def response_json_schema(text_limits: dict) -> dict:
                 "additionalProperties": False,
             },
             "grading": {"anyOf": [grading, {"type": "null"}]},
+            "question_number": {"anyOf": [
+                {"type": "string", "pattern": QUESTION_NUMBER_PATTERN.pattern}, {"type": "null"},
+            ]},
+            "scores": {"anyOf": [{
+                "type": "object",
+                "properties": {key: {"type": "integer", "minimum": 0, "maximum": SECTION_SCORE_MAX} for key in SCORE_KEYS},
+                "required": list(SCORE_KEYS),
+                "additionalProperties": False,
+            }, {"type": "null"}]},
             "evidence": {
                 "type": "array",
                 "items": {
@@ -120,7 +135,7 @@ def response_json_schema(text_limits: dict) -> dict:
                 },
             },
         },
-        "required": ["reading_quality", "grading", "evidence"],
+        "required": ["reading_quality", "grading", "question_number", "scores", "evidence"],
         "additionalProperties": False,
     }
 
@@ -138,7 +153,20 @@ class CalibrationValidator:
         return tuple(values)
 
     def validate(self, data: Any, identity: Identity) -> CalibrationResponse:
-        exact_keys(data, ("reading_quality", "grading", "evidence"), "calibration response")
+        # Jobs prepared before scores were added keep their older schema snapshot.
+        if not isinstance(data, dict) or "scores" in data or "question_number" in data:
+            exact_keys(data, ("reading_quality", "grading", "question_number", "scores", "evidence"), "calibration response")
+        else:
+            exact_keys(data, ("reading_quality", "grading", "evidence"), "calibration response")
+        question_number, scores = data.get("question_number"), data.get("scores")
+        if question_number is not None and (not isinstance(question_number, str)
+                                            or not QUESTION_NUMBER_PATTERN.match(question_number)):
+            raise ValidationError(f"question_number: expected Q followed by a number, got {question_number!r}")
+        if scores is not None:
+            exact_keys(scores, SCORE_KEYS, "scores")
+            for key in SCORE_KEYS:
+                if type(scores[key]) is not int or not 0 <= scores[key] <= SECTION_SCORE_MAX:
+                    raise ValidationError(f"scores.{key}: whole number 0..{SECTION_SCORE_MAX} required")
         reading = data["reading_quality"]
         exact_keys(reading, ("complete_essay_legible", "uncertainties", "materially_affects_grade"), "reading_quality")
         if type(reading["complete_essay_legible"]) is not bool or type(reading["materially_affects_grade"]) is not bool:
@@ -165,7 +193,9 @@ class CalibrationValidator:
         if quality.materially_affects_grade:
             if data["grading"] is not None:
                 raise ValidationError("Materially unreadable essay must not contain fabricated grading")
-            return CalibrationResponse(quality, None, tuple(evidence))
+            if scores is not None:
+                raise ValidationError("Materially unreadable essay must not contain fabricated scores")
+            return CalibrationResponse(quality, None, tuple(evidence), question_number)
 
         grading = data["grading"]
         if grading is None:
@@ -185,5 +215,7 @@ class CalibrationValidator:
         teacher_comment = required_text(grading["teacher_comment"], "teacher_comment", self.text_limits["teacher_comment"]["hard_max"])
         if not evidence:
             raise ValidationError("Assessable essay requires evidence with page references")
+        if "scores" in data and scores is None:
+            raise ValidationError("Assessable essay requires content_score and language_structure_score")
         grade = CalibrationGrade(actual.student_id, actual.student_name, actual.class_name, criteria, teacher_comment)
-        return CalibrationResponse(quality, grade, tuple(evidence))
+        return CalibrationResponse(quality, grade, tuple(evidence), question_number, scores)

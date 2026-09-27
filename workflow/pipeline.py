@@ -271,7 +271,8 @@ class Pipeline:
 
         Every grader file (prompt snapshots, model response, per-call checks)
         stays inside ``work/``, so discarding the essay folder removes the
-        whole attempt. Returns the validated result; nothing is saved here.
+        whole attempt. Returns the validated result and the grader's suggested
+        question number and section scores; nothing is saved here.
         """
         work_dir = self.jobs_dir / job_key(identity) / "work"
         work_dir.mkdir(parents=True)
@@ -286,7 +287,8 @@ class Pipeline:
         if outcome.get("state") != State.VALIDATED.value:
             raise ValidationError("The grader did not produce a validated result")
         parsed = read_json(Path(outcome["job_dir"]) / "parsed_result.json")
-        return self.validator.validate(parsed["grading"], identity)
+        suggested = {"question_number": parsed.get("question_number"), "scores": parsed.get("scores")}
+        return self.validator.validate(parsed["grading"], identity), suggested
 
     def run_real_batch(self, records, source_dir, *, limit=None, essay_question=None, model_profile=None,
                        progress_callback=None, cancelled=None):
@@ -427,13 +429,13 @@ class Pipeline:
                 "essay_question": essay_question,
                 "model_profile": profile,
             })
-            result = self._grade_essay(
+            result, suggested = self._grade_essay(
                 source_pdf, identity, essay_question, profile,
                 timing_callback=lambda event: record_timing(key, event),
             )
             record_timing(key, "validation_finish")
             _marking_trace(f"grader returned student={label}")
-            return result, digest
+            return result, suggested, digest
 
         def display(item):
             identity = item["identity"]
@@ -496,13 +498,16 @@ class Pipeline:
                         fail(item, error, "marking")
                         continue
                     identity = item["identity"]
-                    grading, digest = graded
+                    grading, suggested, digest = graded
                     try:
                         with timing_guard:
                             active_writers += 1
                             max_active_writers = max(max_active_writers, active_writers)
                         try:
-                            self.excel.ensure_draft(grading, identity, item["job_id"], digest, essay_question or "")
+                            # A batch-level essay question takes precedence over the grader's reading.
+                            self.excel.ensure_draft(grading, identity, item["job_id"], digest,
+                                                    essay_question or suggested["question_number"] or "",
+                                                    teacher_scores=suggested["scores"])
                             if self._workbook_state(identity) != "saved":
                                 raise ValidationError("The result row could not be verified in the workbook after saving")
                             review_status = self.excel.get(item["job_id"], identity).review_status

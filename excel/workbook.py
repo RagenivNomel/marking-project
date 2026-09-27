@@ -20,6 +20,11 @@ from .schema import AUDIT_HEADERS, AUDIT_SHEET, HEADERS, SHEET
 
 APPROVAL_STATUSES = ("PENDING", "APPROVED")
 APPROVAL_VALIDATION_RANGE = "Y2:Y1048576"
+TOTAL_COLUMN = HEADERS.index("总分") + 1
+
+
+def _total_formula(row_index):
+    return f"=E{row_index}+F{row_index}"
 
 _WORKBOOK_LOCKS = {}
 _WORKBOOK_LOCKS_GUARD = threading.Lock()
@@ -230,15 +235,17 @@ class ExcelStore:
                 if (roster_text(audit[1].value), roster_text(audit[2].value)) == (
                         identity.class_name, identity.student_id):
                     raise ValidationError("Existing Excel audit evidence conflicts with this result")
+            row_index = sheet.max_row + 1
+            if total_score is None and content_score is not None and language_structure_score is not None:
+                total_score = _total_formula(row_index)
             values = [result.class_name, result.student_id, result.student_name, topic,
                       content_score, language_structure_score, total_score]
             for name in CRITERIA:
                 values += [result.criteria[name].rating, result.criteria[name].short_comment]
             values += [result.teacher_comment, "PENDING"]
-            row_index = sheet.max_row + 1
             for col, value in enumerate(values, 1):
                 cell = sheet.cell(row_index, col, value)
-                if isinstance(value, str):
+                if isinstance(value, str) and col != TOTAL_COLUMN:
                     cell.data_type = "s"
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
             sheet.row_dimensions[row_index].height = 120
@@ -249,9 +256,20 @@ class ExcelStore:
             book.close()
 
     def _decode(self, row, identity):
-        if any(cell.data_type == "f" for cell in row):
-            raise ValidationError("Result rows require literal approved values, not formulas")
+        # Only 总分 may be a formula, and only the exact =E<row>+F<row> sum, which
+        # is recomputed here because openpyxl does not evaluate formulas.
         values = [cell.value for cell in row]
+        total_is_formula = False
+        for cell in row:
+            if cell.data_type != "f":
+                continue
+            if cell.column != TOTAL_COLUMN or str(cell.value).replace(" ", "").upper() != _total_formula(cell.row):
+                raise ValidationError("Result rows require literal approved values; only 总分 may be =E+F")
+            total_is_formula = True
+        if total_is_formula:
+            content = self._score(values[4], "内容分")
+            language = self._score(values[5], "语文与结构分")
+            values[6] = None if content is None or language is None else content + language
         grading = dict(
             class_name=roster_text(values[0]), student_id=roster_text(values[1]), student_name=roster_text(values[2]),
             criteria={name: {"rating": values[7 + 2*i], "short_comment": values[8 + 2*i]} for i, name in enumerate(CRITERIA)},
