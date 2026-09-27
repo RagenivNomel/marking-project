@@ -46,6 +46,9 @@ and Tesseract, and self-checks the packaged app with a bare PATH, as a Finder
 or desktop-shortcut launch would have. The release file lands in `dist/`.
 Raise `version` in `pixi.toml` before building a new release.
 
+On Windows, clone into a short folder path such as `C:\src\marking-project`: Qt's
+plugin paths inside the environment otherwise pass Windows' 260-character limit.
+
 Installing a release:
 
 - macOS: open the `.dmg` and drag Marking App to Applications. The app is not

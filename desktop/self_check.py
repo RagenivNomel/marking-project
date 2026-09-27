@@ -66,8 +66,16 @@ def _check_resources(report):
 
 def _check_interface(report):
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    from PySide6.QtCore import qInstallMessageHandler
     from desktop.__main__ import create_app
-    app, engine, bridge = create_app([sys.argv[0]])
+    messages = []
+    qInstallMessageHandler(lambda kind, context, message: messages.append(message))
+    try:
+        app, engine, bridge = create_app([sys.argv[0]])
+    except RuntimeError as exc:
+        raise RuntimeError("; ".join([str(exc), *messages])) from None
+    finally:
+        qInstallMessageHandler(None)
     report["qml_windows"] = len(engine.rootObjects())
     bridge.shutdown()
 
