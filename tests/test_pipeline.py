@@ -103,6 +103,77 @@ class PipelineTests(unittest.TestCase):
         finally:
             book.close()
 
+    def _store_with_students(self, name, numbers):
+        store = ExcelStore(self.root / name / "results.xlsx", self.pipeline.validator)
+        identities = {}
+        for number in numbers:
+            identity = Identity.from_dict({**self.identity.to_dict(), "student_id": number,
+                                           "student_name": f"学生{number}"})
+            result = self.pipeline.validator.validate(
+                MockGrader().grade(GradingInput(identity, self.source["essay"])), identity)
+            store.ensure_draft(result, identity, f"job-{number}", f"digest-{number}", "",
+                               {"content_score": int(number), "language_structure_score": 1})
+            identities[number] = identity
+        return store, identities
+
+    def test_sort_rows_orders_by_index_number_and_keeps_every_student_reachable(self):
+        store, identities = self._store_with_students("sorted", ["10", "2", "1"])
+        store.set_status("job-2", identities["2"], State.APPROVED.value, "APPROVED")
+        store.sort_rows()
+        book = load_workbook(store.path)
+        try:
+            sheet = book[SHEET]
+            self.assertEqual([sheet.cell(r, 2).value for r in (2, 3, 4)], ["1", "2", "10"])
+            # Each 总分 sum is rewritten for the row it now sits on.
+            self.assertEqual([sheet.cell(r, 7).value for r in (2, 3, 4)], ["=E2+F2", "=E3+F3", "=E4+F4"])
+            hints = {row[2].value: row[3].value for row in book[AUDIT_SHEET].iter_rows(min_row=2)}
+            self.assertEqual(hints, {"1": 2, "2": 3, "10": 4})
+        finally:
+            book.close()
+        for number, identity in identities.items():
+            record = store.get(f"job-{number}", identity)
+            self.assertEqual((record.student_id, record.total_score), (number, int(number) + 1))
+        self.assertEqual(store.get("job-2", identities["2"]).review_status, "APPROVED")
+        record, audit = store.get_render_source("job-2", identities["2"])
+        self.assertEqual((record.student_id, audit["excel_row"]), ("2", 3))
+        before = store.path.read_bytes()
+        store.sort_rows()  # already in order: nothing is saved
+        self.assertEqual(store.path.read_bytes(), before)
+
+    def test_teacher_reordered_rows_are_found_by_class_and_index_number(self):
+        store, identities = self._store_with_students("teacher-sorted", ["1", "2"])
+        book = load_workbook(store.path)
+        try:
+            sheet = book[SHEET]
+            # As Excel's own sort would: swap the rows and shift each sum;
+            # the audit Excel行 hints are left stale.
+            first = [cell.value for cell in sheet[2]]
+            second = [cell.value for cell in sheet[3]]
+            first[6], second[6] = "=E3+F3", "=E2+F2"
+            for col, value in enumerate(second, 1):
+                sheet.cell(2, col, value)
+            for col, value in enumerate(first, 1):
+                sheet.cell(3, col, value)
+            book.save(store.path)
+        finally:
+            book.close()
+        for number, identity in identities.items():
+            self.assertEqual(store.get(f"job-{number}", identity).student_id, number)
+        store.set_status("job-1", identities["1"], State.APPROVED.value, "APPROVED")
+        self.assertEqual(store.get("job-1", identities["1"]).review_status, "APPROVED")
+        self.assertEqual(store.get("job-2", identities["2"]).review_status, "PENDING")
+
+    def test_two_rows_for_one_student_are_never_resolved_to_either(self):
+        store, identities = self._store_with_students("duplicate-rows", ["1", "2"])
+        book = load_workbook(store.path)
+        try:
+            book[SHEET].cell(3, 2).value = "1"
+            book.save(store.path)
+        finally:
+            book.close()
+        with self.assertRaisesRegex(ValidationError, "Duplicate student rows"):
+            store.get("job-1", identities["1"])
+
     def test_production_workbook_has_approval_dropdown_and_preserves_approved_value(self):
         validated = self.pipeline.validator.validate(
             MockGrader().grade(GradingInput(self.identity, self.source["essay"])),

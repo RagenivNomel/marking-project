@@ -1,4 +1,5 @@
 """Batch-friendly Excel repository; approved wording is read back verbatim."""
+from copy import copy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -175,16 +176,27 @@ class ExcelStore:
             Path(temporary).unlink(missing_ok=True)
 
     @staticmethod
-    def _row(book, job_id):
+    def _student_row(book, class_name, student_id):
+        # Students are found by 班级 + 班号, never by position, so the teacher
+        # sheet may be sorted or filtered freely. The Excel行 audit column is
+        # kept only as a readable hint.
+        matches = [row for row in book[SHEET].iter_rows(min_row=2)
+                   if (roster_text(row[0].value), roster_text(row[1].value)) == (class_name, student_id)]
+        if len(matches) > 1:
+            raise ValidationError("Duplicate student rows in Excel results sheet")
+        if not matches:
+            raise ValidationError("Excel audit student has no result row")
+        return matches[0]
+
+    @classmethod
+    def _row(cls, book, job_id):
         matches = [row for row in book[AUDIT_SHEET].iter_rows(min_row=2) if row[0].value == job_id]
         if len(matches) > 1:
             raise ValidationError("Duplicate job rows in Excel audit sheet")
         if not matches:
             return None, None
-        row_number = matches[0][3].value
-        if type(row_number) is not int or row_number < 2:
-            raise ValidationError("Invalid Excel row reference in audit sheet")
-        return book[SHEET][row_number], matches[0]
+        audit = matches[0]
+        return cls._student_row(book, roster_text(audit[1].value), roster_text(audit[2].value)), audit
 
     @staticmethod
     def _score(value, label):
@@ -323,10 +335,9 @@ class ExcelStore:
             if len(candidates) != 1:
                 raise ValidationError("Approved Excel render source is not uniquely identified")
             audit_row = candidates[0]
-            row_number = audit_row[3].value
-            if type(row_number) is not int or row_number < 2:
-                raise ValidationError("Invalid Excel row reference in audit sheet")
-            record = self._decode(book[SHEET][row_number], identity)
+            row = self._student_row(book, roster_text(audit_row[1].value), roster_text(audit_row[2].value))
+            row_number = row[0].row
+            record = self._decode(row, identity)
             if record.review_status != "APPROVED":
                 raise ValidationError("Student result is not APPROVED in Excel")
             digest = audit_row[4].value
@@ -374,3 +385,65 @@ class ExcelStore:
             self._save(book)
         finally:
             book.close()
+
+    def sort_rows(self):
+        """Order the teacher sheet by 班级 then 班号, lowest first (1, 2, 3 …).
+
+        Values, cell types, styles, comments and row heights move with each
+        student; a 总分 =E+F sum is rewritten for its new row. Excel行 hints
+        in the audit sheet are refreshed. Nothing is saved if already in order.
+        """
+        with self._write_lock:
+            if not self.path.exists():
+                return
+            book = self._open()
+            try:
+                if self._sort_rows_unlocked(book):
+                    self._save(book)
+            finally:
+                book.close()
+
+    @staticmethod
+    def _sort_rows_unlocked(book):
+        sheet = book[SHEET]
+        width = len(HEADERS)
+        rows = []
+        for row in sheet.iter_rows(min_row=2, max_col=width):
+            if not any(cell.value is not None for cell in row):
+                continue
+            rows.append({
+                "row": row[0].row,
+                "key": tuple(roster_text(row[i].value) for i in (0, 1)),
+                "height": sheet.row_dimensions[row[0].row].height,
+                "cells": [(cell.value, cell.data_type, copy(cell._style), copy(cell.comment)) for cell in row],
+            })
+        ordered = sorted(rows, key=lambda item: tuple(_sort_key(value) for value in item["key"]))
+        targets = [item["row"] for item in rows]
+        if [item["row"] for item in ordered] == targets:
+            return False
+        targets.sort()
+        new_rows = {}
+        for target, item in zip(targets, ordered):
+            new_rows[item["key"]] = target
+            sheet.row_dimensions[target].height = item["height"]
+            for col, (value, data_type, style, comment) in enumerate(item["cells"], 1):
+                cell = sheet.cell(target, col)
+                if (col == TOTAL_COLUMN and data_type == "f"
+                        and str(value).replace(" ", "").upper() == _total_formula(item["row"])):
+                    value = _total_formula(target)
+                cell.value = value
+                if value is not None:
+                    cell.data_type = data_type
+                cell._style = style
+                cell.comment = comment
+        for audit in book[AUDIT_SHEET].iter_rows(min_row=2):
+            key = (roster_text(audit[1].value), roster_text(audit[2].value))
+            if key in new_rows:
+                audit[3].value = new_rows[key]
+        return True
+
+
+def _sort_key(text):
+    # Numbers compare as numbers, so 班号 9 comes before 10; any non-numeric
+    # value comes after every number.
+    return (0, int(text), "") if text.isdigit() else (1, 0, text)

@@ -327,7 +327,9 @@ class Stage3CRenderTests(unittest.TestCase):
         self._add_row(self._identity("41", "重复提交学生"), job_id="essay-row-b")
         self._relabel_row("essay-row-b", identity)
         with _forbid_grading_and_model_calls():
-            with self.assertRaisesRegex(ValueError, "same feedback-card filename"):
+            # Two rows for one student are caught when the workbook is
+            # inspected, before any card filename is chosen.
+            with self.assertRaisesRegex(ValueError, "Resolve the task evidence warnings"):
                 self.controller.execute(Action.RENDER_APPROVED, self.source)
         self.assertFalse(list(self.jobs_root.rglob("*-作文体检卡.png")))
 

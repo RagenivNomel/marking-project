@@ -594,7 +594,8 @@ class ApplicationWorkflowTests(unittest.TestCase):
                             ]
                         )
                     elif scenario == "bad-mapping":
-                        audit["D2"] = "not-an-excel-row"
+                        # Excel行 is only a hint; a broken student link must still be caught.
+                        audit["C2"] = "999"
                     elif scenario == "formula":
                         sheet["H2"] = "=1+1"
                     else:
