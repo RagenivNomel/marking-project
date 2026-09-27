@@ -57,6 +57,7 @@ def _check_render_and_ocr(report):
 
 
 def _check_resources(report):
+    from app_paths import is_frozen
     from grading.schemas import ROOT, Validator
     from rendering.renderer import PillowRenderer
     Validator(ROOT / "config")
@@ -65,6 +66,8 @@ def _check_resources(report):
                      "tessdata/chi_sim.traineddata", "split_by_student.py"):
         if not (ROOT / relative).is_file():
             raise RuntimeError(f"missing {relative}")
+    if is_frozen() and not (ROOT / "licenses" / "THIRD-PARTY-NOTICES.txt").is_file():
+        raise RuntimeError("missing licenses/THIRD-PARTY-NOTICES.txt")
 
 
 def _check_interface(report):

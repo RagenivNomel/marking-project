@@ -1,7 +1,8 @@
 """Build a release of the Marking App for this computer: `pixi run build`.
 
 1. Run the unit tests (skip with --skip-tests).
-2. Package the app with PyInstaller from the locked pixi environment.
+2. Package the app with PyInstaller from the locked pixi environment,
+   with the licences of everything it bundles (packaging/collect_licenses.py).
 3. Run the packaged app's --self-check with a bare PATH, as a Finder or
    desktop-shortcut launch would get, so it must rely on what it bundles.
 4. Write the release file to dist/: a .dmg on macOS, a .zip on Windows.
@@ -53,6 +54,10 @@ def run_tests():
 
 
 def package(app_version):
+    step("Collecting third-party licences")
+    sys.path.insert(0, str(ROOT / "packaging"))
+    import collect_licenses
+    collect_licenses.main()
     step("Packaging with PyInstaller")
     env = dict(os.environ, MARKING_APP_VERSION=app_version)
     run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",

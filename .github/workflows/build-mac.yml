@@ -18,7 +18,8 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           pixi-version: v0.81.0
-          cache: true
+          # A fresh install keeps each package's licence files for the notices.
+          cache: false
       - run: pixi run build
       - uses: actions/upload-artifact@v7
         with:

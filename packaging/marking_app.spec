@@ -25,6 +25,8 @@ datas = [
     (str(ROOT / "tessdata" / "chi_sim.traineddata"), "tessdata"),
     # Loaded by file path from scanning/split_by_student.py.
     (str(ROOT / "split_by_student.py"), "."),
+    # Written by packaging/collect_licenses.py before PyInstaller runs.
+    (str(ROOT / "build" / "licenses"), "licenses"),
 ]
 for name in ("calibration_model.json", "calibration_rubric_v1.json", "calibration_rubric_v2.json",
              "criteria.json", "models.json", "text_limits.json"):

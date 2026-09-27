@@ -81,3 +81,10 @@ report scripts use the same explicit skip message.
 ## Privacy
 
 Never commit real student data, jobs, outputs, or grading records. Operational data is intentionally local-only.
+
+## Third-party software
+
+The packaged app bundles Qt for Python (PySide6, LGPL-3.0), Poppler (GPL-2.0-or-later),
+Tesseract (Apache-2.0), the Noto Sans SC font (OFL-1.1) and other open-source
+components. Each build collects their licences, versions and source locations into
+`licenses/THIRD-PARTY-NOTICES.txt` inside the app (`packaging/collect_licenses.py`).
