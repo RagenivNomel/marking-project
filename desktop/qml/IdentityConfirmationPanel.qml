@@ -28,6 +28,13 @@ Item {
         selections = next
         selectionVersion++
     }
+    // Dropdown choices: every roster student, then "skip this essay".
+    function skipKey() { return String((review.skipOption || {}).key || "") }
+    function choices() {
+        var list = (review.roster || []).slice()
+        if (review.skipOption) list.push(review.skipOption)
+        return list
+    }
     function rosterItem(key) {
         var roster = review.roster || []
         for (var i = 0; i < roster.length; i++) if (String(roster[i].key) === String(key)) return roster[i]
@@ -48,7 +55,7 @@ Item {
         var rows = review.rows || []
         for (var j = 0; j < rows.length; j++) {
             var key = String(selections[String(rows[j].sourcePdf)] || "")
-            if (!key.length) continue
+            if (!key.length || key === panel.skipKey()) continue
             if (seen[key]) return true
             seen[key] = true
         }
@@ -60,6 +67,10 @@ Item {
         var rows = review.rows || []
         for (var i = 0; i < rows.length; i++) {
             var key = String(selections[String(rows[i].sourcePdf)] || "")
+            if (key === panel.skipKey()) {
+                result.push({sourcePdf: String(rows[i].sourcePdf), skip: true})
+                continue
+            }
             var student = rosterItem(key)
             if (student) result.push({sourcePdf: String(rows[i].sourcePdf), className: String(student.className), studentId: String(student.studentId)})
         }
@@ -136,7 +147,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 280
                         implicitHeight: Theme.controlHeight
-                        model: panel.review.roster || []
+                        model: panel.choices()
                         textRole: "label"
                         valueRole: "key"
                         font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize

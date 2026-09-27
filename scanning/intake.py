@@ -10,7 +10,9 @@ from grading.schemas import ValidationError
 from scanning.identity import confirm_identity
 
 
-MATCH_STATUSES = ("STRONG_ROSTER_MATCH", "CONFIRMATION_REQUIRED")
+# SKIPPED: the teacher set this essay aside (e.g. a second essay from a student
+# already in the task); it is not marked here and names no student.
+MATCH_STATUSES = ("STRONG_ROSTER_MATCH", "CONFIRMATION_REQUIRED", "SKIPPED")
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,14 @@ def apply_identity_decisions(submissions, roster, decisions, require_complete=Tr
         status = decision.get("match_status")
         if status not in MATCH_STATUSES:
             raise ValidationError(f"{submission.source_pdf}: invalid match status")
+        if status == "SKIPPED":
+            result.append({
+                **asdict(submission),
+                "match_status": status,
+                "evidence": str(decision["evidence"]),
+                "saved_copy": str(decision.get("saved_copy") or ""),
+            })
+            continue
         identity = confirm_identity(roster, str(decision["class_name"]), str(decision["student_id"]))
         key = (identity.class_name, identity.student_id)
         if status == "STRONG_ROSTER_MATCH":

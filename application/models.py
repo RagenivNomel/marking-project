@@ -91,6 +91,9 @@ class Inspection:
     submissions: tuple[SubmissionState, ...] = ()
     attention: tuple[Attention, ...] = ()
     available_actions: tuple[AvailableAction, ...] = ()
+    # Saved copies of essays the teacher skipped. They are not submissions of
+    # this task, so they never count towards confirmation, marking or cards.
+    skipped: tuple[str, ...] = ()
 
     @property
     def summary(self) -> dict[str, int]:
@@ -100,6 +103,7 @@ class Inspection:
         committed = sum(s.workbook_valid for s in items)
         return {
             "submissions": len(items),
+            "skipped": len(self.skipped),
             "grading_results_available": committed,
             "committed_results": committed,
             "committed_results_available": committed,

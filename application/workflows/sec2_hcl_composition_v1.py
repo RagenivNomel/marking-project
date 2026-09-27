@@ -208,7 +208,8 @@ class CompositionWorkflow:
             lock = _path(root) / ".pipeline.lock"
             if lock_is_active(lock):
                 issues.append(Attention("BATCH_LOCKED", "error", "任务可能仍在运行，请先检查，不要直接重试。", str(lock)))
-        self._intake(source, entries, issues)
+        skipped = []
+        self._intake(source, entries, issues, skipped)
         self._cards(source, workbook, entries, issues)
         if before is not None:
             try:
@@ -221,7 +222,7 @@ class CompositionWorkflow:
                     entry.record = None
                     entry.rendered = False
         # Suppress actions when assignment-wide evidence is incomplete or ambiguous.
-        return self._finish(entries, issues, workbook is not None and workbook.is_file())
+        return self._finish(entries, issues, workbook is not None and workbook.is_file(), skipped)
 
     @staticmethod
     def _workbook(path, validator, entries, issues):
@@ -296,7 +297,7 @@ class CompositionWorkflow:
         return sorted(paths)
 
     @staticmethod
-    def _intake(source, entries, issues):
+    def _intake(source, entries, issues, skipped):
         if source.split_pile is None:
             if source.roster is not None or source.identity_decisions is not None:
                 issues.append(Attention("INTAKE_SOURCE_MISSING", "error", "请同时指定作文资料文件夹。"))
@@ -322,6 +323,10 @@ class CompositionWorkflow:
         for submission in submissions:
             pdf = (pile / submission.source_pdf).resolve()
             record = decisions.get(submission.source_pdf)
+            if record and record["match_status"] == "SKIPPED":
+                # Set aside by the teacher: not part of this task's marking.
+                skipped.append(record["saved_copy"] or str(pdf))
+                continue
             identity = (Identity.from_dict({k: record[k] for k in ("class_name", "student_id", "student_name")})
                         if record else None)
             confirmed = bool(record and record["match_status"] == "STRONG_ROSTER_MATCH")
@@ -408,7 +413,7 @@ class CompositionWorkflow:
                 entry.rendered = False
 
     @staticmethod
-    def _finish(entries, issues, has_workbook):
+    def _finish(entries, issues, has_workbook, skipped=()):
         issues = list(dict.fromkeys(issues))
         global_error = any(a.severity == "error" for a in issues)
         submissions = []
@@ -449,12 +454,12 @@ class CompositionWorkflow:
             targets.setdefault(Action.RESOLVE_ATTENTION, [])
         if not entries and not issues and not has_workbook:
             targets[Action.PREPARE_SUBMISSIONS] = []
-        return Inspection(WORKFLOW_ID, DISPLAY_NAME, STAGES, tuple(submissions), tuple(issues), tuple(
+        return Inspection(WORKFLOW_ID, DISPLAY_NAME, STAGES, tuple(submissions), tuple(issues), available_actions=tuple(
             AvailableAction(action, tuple(targets[action]), action in (
                 Action.REFRESH_REVIEW_STATUS, Action.RUN_MARKING, Action.RENDER_APPROVED
             ))
             for action in Action if action in targets
-        ))
+        ), skipped=tuple(skipped))
 
     def _feedback_source(self, source):
         """Bind rendering to this app's matching output/jobs batch only."""
@@ -704,6 +709,7 @@ class CompositionWorkflow:
             read_json(source.identity_decisions),
             require_complete=True,
         )
+        records = [record for record in records if record["match_status"] != "SKIPPED"]
         by_student = defaultdict(list)
         for item in inspection.submissions:
             if item.class_name and item.student_id:

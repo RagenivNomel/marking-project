@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import shutil
 import unicodedata
 
 from application.models import AssignmentSource, Inspection
@@ -19,6 +20,23 @@ from workflow.storage import atomic_json, read_json
 
 
 DEFAULT_ROSTER = ROOT / "中二高华作文3评改终稿.xlsx"
+# Dropdown value meaning "set this essay aside". It never matches a roster key.
+SKIP_KEY = "__skip__"
+SKIPPED_FOLDER = "跳过的作文"
+
+
+def skipped_copy_path(source: AssignmentSource, submission) -> Path:
+    """Where a skipped essay is saved so the teacher can open it as its own task.
+
+    The folder sits beside the teacher's scan; the name keeps the scan name
+    and the essay number, e.g. 跳过的作文/class-scan-作文005.pdf.
+    """
+    pile = source.split_pile.resolve()
+    if source.continuous_scan is not None:
+        stem = Path(source.continuous_scan).stem
+    else:
+        stem = re.sub(r"\.essay-work-[0-9a-f]+$", "", pile.name).lstrip(".") or "scan"
+    return pile.parent / SKIPPED_FOLDER / f"{stem}-作文{submission.sequence:03}.pdf"
 
 
 def _decision_stem(pile: Path) -> str:
@@ -146,8 +164,12 @@ def build_identity_review(source: AssignmentSource, inspection: Inspection, lang
 
     rows = []
     confirmed = 0
+    skipped = 0
     pile = source.split_pile.resolve()
     for submission in submissions:
+        if (decisions.get(submission.source_pdf) or {}).get("match_status") == "SKIPPED":
+            skipped += 1
+            continue
         pdf = (pile / submission.source_pdf).resolve()
         submission_id = f"submission:{pdf}"
         is_confirmed = submission_id in confirmed_ids or str(pdf) in confirmed_source_evidence
@@ -185,8 +207,14 @@ def build_identity_review(source: AssignmentSource, inspection: Inspection, lang
         "roster": roster_items,
         "usedKeys": used_keys,
         "confirmedCount": confirmed,
-        "totalCount": len(submissions),
+        "totalCount": len(submissions) - skipped,
+        "skippedCount": skipped,
         "remainingCount": len(rows),
+        "skipOption": {
+            "key": SKIP_KEY,
+            "label": ("Skip this essay (saved as its own PDF to open as a new task)" if language == "en"
+                      else "跳过这份作文（另存为单独 PDF，可作为新任务打开）"),
+        },
         "message": ("Confirm the student for each remaining submission." if language == "en"
                     else "请确认每份作文对应的学生。"),
     }
@@ -210,6 +238,20 @@ def save_identity_confirmations(source: AssignmentSource, selections: list[dict]
         if source_pdf in seen_selection_files or source_pdf not in by_submission:
             raise ValidationError("Identity confirmation refers to a duplicate or unknown submission")
         seen_selection_files.add(source_pdf)
+        if selection.get("skip") is True:
+            # Keep a visible copy beside the scan; the split file itself stays
+            # in the app's working folder, untouched.
+            copy = skipped_copy_path(source, by_submission[source_pdf])
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source.split_pile / source_pdf, copy)
+            existing[source_pdf] = {
+                "source_pdf": source_pdf,
+                "match_status": "SKIPPED",
+                "saved_copy": str(copy),
+                "evidence": "Teacher skipped this essay in the desktop student-information workspace.",
+                "human_confirmation": datetime.now(timezone.utc).isoformat(),
+            }
+            continue
         class_name = str(selection.get("className") or "")
         student_id = str(selection.get("studentId") or "")
         identity = confirm_identity(roster, class_name, student_id)

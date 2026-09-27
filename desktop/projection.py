@@ -109,6 +109,10 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
     else:
         subtitle = (f'{inspection.display_name} · {summary["submissions"]} submissions / {summary["identities"]} students'
                     if en else f'{inspection.display_name} · {summary["submissions"]}份作文 / {summary["identities"]}名学生')
+    if inspection.skipped:
+        # Skipped essays are saved beside the scan to be opened as their own task.
+        subtitle += (f' · {len(inspection.skipped)} skipped (saved in the 跳过的作文 folder next to the scan)'
+                     if en else f' · 另有{len(inspection.skipped)}份已跳过（已另存到扫描文件旁的“跳过的作文”文件夹）')
     notice = ('Local assignment · Saved files were checked; marking is not running.'
               if en else '本地作文任务 · 已检查保存的资料；当前没有运行批改。')
     state = dict(demo=False, scenario='real', view='workspace', section=2, title=title,

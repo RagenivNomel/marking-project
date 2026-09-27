@@ -15,6 +15,7 @@ from desktop.fixtures import demo_state
 from grading.schemas import ValidationError
 from desktop.identity_confirmation import (
     DEFAULT_ROSTER,
+    SKIPPED_FOLDER,
     build_identity_review,
     prepare_identity_suggestions,
     resolve_identity_companions,
@@ -451,6 +452,12 @@ class DesktopBridge(QObject):
         self._source = source
         self._state['notice'] = (f'{saved} student confirmation records saved. Checking the task again…'
                                  if self._language == 'en' else f'已保存{saved}份学生确认记录，正在重新检查任务…')
+        skipped = sum(1 for item in (selections or ()) if item.get('skip') is True)
+        if skipped and source.split_pile is not None:
+            folder = source.split_pile.resolve().parent / SKIPPED_FOLDER
+            self._state['notice'] += (f' {skipped} skipped essay(s) saved to {folder}; open one as a new task to mark it.'
+                                      if self._language == 'en' else
+                                      f'已跳过{skipped}份作文，已另存到：{folder}。可把它作为新任务打开并批改。')
         self.changed.emit()
         self.inspect_source(source, refresh=True)
 
