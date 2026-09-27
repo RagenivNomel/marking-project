@@ -1,5 +1,9 @@
 # Marking Project
 
+[![Marking app video v2](docs/media/marking-app-video-v2.gif)](docs/media/marking-app-video-v2.mp4)
+
+*Marking app video v2. Click to watch with sound. Students shown are fictional.*
+
 Desktop workflow for Secondary 2 Higher Chinese composition marking.
 
 ## Workflow
