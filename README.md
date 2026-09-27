@@ -82,6 +82,10 @@ report scripts use the same explicit skip message.
 
 Never commit real student data, jobs, outputs, or grading records. Operational data is intentionally local-only.
 
+## Licence
+
+This project's own code is under the MIT License (see `LICENSE`).
+
 ## Third-party software
 
 The packaged app bundles Qt for Python (PySide6, LGPL-3.0), Poppler (GPL-2.0-or-later),
