@@ -86,6 +86,13 @@ Item {
                     color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize; wrapMode: Text.Wrap
                 }
                 Text {
+                    // Why the roster could not be used, e.g. a missing 班级 column.
+                    visible: (panel.review.roster || []).length === 0 && String(panel.review.message || "").length > 0
+                    textFormat: Text.PlainText; Layout.fillWidth: true
+                    text: String(panel.review.message || "")
+                    color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize; font.weight: Font.DemiBold; wrapMode: Text.Wrap
+                }
+                Text {
                     textFormat: Text.PlainText
                     text: I18n.choose("已确认 " + String(panel.review.confirmedCount || 0) + " / " + String(panel.review.totalCount || 0), "Confirmed " + String(panel.review.confirmedCount || 0) + " / " + String(panel.review.totalCount || 0))
                     color: Theme.deepBlue; font.family: Theme.fontFamily; font.pixelSize: Theme.cardTitleSize; font.weight: Font.Bold

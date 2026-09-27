@@ -39,7 +39,10 @@ class AssignmentSource:
     split_pile: Path | None = None
     roster: Path | None = None
     identity_decisions: Path | None = None
-    roster_sheet: str = "作文诊断输入"
+    # The roster sheet is found by its headings unless named here. roster_class
+    # is the class for every student when the roster has no 班级 column.
+    roster_sheet: str | None = None
+    roster_class: str | None = None
     config_dir: Path | None = None
     # Derived locations for app-managed outputs. These are populated by the
     # workflow adapter and are never teacher-selected inputs.

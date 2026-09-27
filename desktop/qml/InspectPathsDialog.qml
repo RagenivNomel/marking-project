@@ -9,7 +9,7 @@ Dialog {
     property bool reducedMotion: false
     property bool developerMode: false
     property string defaultRosterPath: ""
-    signal inspectRequested(string workbook, string jobs, string receipts, string splitPile, string roster, string continuousScan)
+    signal inspectRequested(string workbook, string jobs, string receipts, string splitPile, string roster, string continuousScan, string rosterClass)
 
     title: dialog.developerMode ? I18n.tr("检查本地文件引用") : I18n.choose("选择作文", "Choose Submissions")
     header: Item { implicitHeight: 0 }
@@ -59,6 +59,11 @@ Dialog {
             Component.onCompleted: if (!value.length && dialog.defaultRosterPath.length) value = dialog.defaultRosterPath
         }
         NeoButton { text: I18n.choose("选择学生名册", "Choose Class Roster"); onClicked: rosterPicker.open(); reducedMotion: dialog.reducedMotion }
+        PathField {
+            id: rosterClassField
+            label: I18n.choose("班级", "Class")
+            placeholder: I18n.choose("只在名册没有“班级”列时填写，例如 207", "Only if the roster has no 班级 column, e.g. 207")
+        }
         Text { textFormat: Text.PlainText;
             Layout.fillWidth: true
             text: dialog.developerMode ? I18n.tr("只需填写已有资料的位置。文件夹可留空；多个关联文件夹用分号分隔。检查仅会读取保存的内容。") : I18n.choose("结果工作簿、作文分组资料和体检卡文件夹会由应用自动管理。", "The app manages the split submissions, results workbook and feedback-card folder automatically.")
@@ -76,7 +81,7 @@ Dialog {
             primary: true
             reducedMotion: dialog.reducedMotion
             onClicked: {
-                dialog.inspectRequested(workbookField.value, jobsField.value, receiptsField.value, splitPileField.value, rosterField.value, continuousScanField.value)
+                dialog.inspectRequested(workbookField.value, jobsField.value, receiptsField.value, splitPileField.value, rosterField.value, continuousScanField.value, rosterClassField.value)
                 dialog.close()
             }
         }

@@ -12,6 +12,7 @@ from application.models import Action
 from application.workflows.registry import WORKFLOWS, get_workflow
 from application.workflows.sec2_hcl_composition_v1 import WORKFLOW_ID as ORIGINAL_WORKFLOW_ID
 from desktop.fixtures import demo_state
+from grading.schemas import ValidationError
 from desktop.identity_confirmation import (
     DEFAULT_ROSTER,
     build_identity_review,
@@ -242,8 +243,9 @@ class DesktopBridge(QObject):
                 'roster': [],
                 'confirmedCount': 0,
                 'totalCount': state.get('summary', {}).get('submissions', 0),
-                'message': ('Student information could not be prepared. Check the roster and try again.'
-                            if self._language == 'en' else '学生资料无法准备，请检查名册后重试。'),
+                'message': (('Student information could not be prepared. Check the roster and try again.'
+                             if self._language == 'en' else '学生资料无法准备，请检查名册后重试。')
+                            + (f'\n{exc}' if isinstance(exc, ValidationError) else '')),
             }
             state['notice'] = str(exc)
         return state
@@ -320,8 +322,8 @@ class DesktopBridge(QObject):
         self._state['reducedMotion'] = value
         self.changed.emit()
 
-    @Slot(str, str, str, str, str, str)
-    def inspectPaths(self, workbook, jobs, receipts, split_pile, roster, continuous_scan):
+    @Slot(str, str, str, str, str, str, str)
+    def inspectPaths(self, workbook, jobs, receipts, split_pile, roster, continuous_scan, roster_class=""):
         def one(value):
             value = value.strip().strip('"')
             if value.startswith('file:'):
@@ -331,7 +333,8 @@ class DesktopBridge(QObject):
             return tuple(one(p) for p in value.split(';') if p.strip())
         source = AssignmentSource(workbook=one(workbook), job_roots=many(jobs),
                                   receipt_roots=many(receipts), split_pile=one(split_pile),
-                                  roster=one(roster), continuous_scan=one(continuous_scan))
+                                  roster=one(roster), continuous_scan=one(continuous_scan),
+                                  roster_class=roster_class.strip() or None)
         source = resolve_identity_companions(source)
         if not any((source.workbook, source.job_roots, source.receipt_roots,
                     source.split_pile, source.continuous_scan)):

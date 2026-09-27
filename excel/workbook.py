@@ -43,25 +43,81 @@ def roster_text(value):
     return str(value).strip() if value is not None else ""
 
 
-def read_roster(path, sheet_name="作文诊断输入"):
+ROSTER_NAME_HEADERS = ("姓名", "学生姓名")
+
+
+def _roster_columns(headers):
+    """Map 班级/班号/姓名 to column indices, or None if this is not a roster sheet."""
+    headers = [roster_text(value) for value in headers]
+    names = [header for header in ROSTER_NAME_HEADERS if header in headers]
+    if "班号" not in headers or not names:
+        return None
+    if len(names) > 1:
+        raise ValidationError("名册的第一行同时有“姓名”和“学生姓名”，请只保留一个。")
+    for header in ("班级", "班号", names[0]):
+        if headers.count(header) > 1:
+            raise ValidationError(f"名册的第一行有两个“{header}”列，请只保留一个。")
+    return {
+        "class_name": headers.index("班级") if "班级" in headers else None,
+        "student_id": headers.index("班号"),
+        "student_name": headers.index(names[0]),
+    }
+
+
+def read_roster(path, sheet_name=None, class_name=None):
+    """Read 班级, 班号 and 姓名 (or 学生姓名) from any Excel workbook.
+
+    Every sheet whose first row has these headings is read and every other
+    column or sheet is ignored, so one sheet per class also works. A student
+    listed twice with the same name counts once; the same 班级 + 班号 with a
+    different name is refused. A sheet without a 班级 column takes the class
+    the teacher gives once as class_name. sheet_name restricts the search.
+    """
+    class_name = roster_text(class_name) or None
     book = load_workbook(path, read_only=True, data_only=True)
     try:
-        sheet = book[sheet_name]
-        rows = sheet.iter_rows(values_only=True)
-        headers = next(rows)
-        name_col = "学生姓名" if "学生姓名" in headers else "姓名"
-        indices = [headers.index(key) for key in ("班号", name_col, "班级")]
-        result, seen = [], set()
-        for row in rows:
-            values = [roster_text(row[i]) if i < len(row) else "" for i in indices]
-            if not any(values):
-                continue
-            identity = Identity.from_dict(dict(zip(("student_id", "student_name", "class_name"), values)))
-            key = (identity.class_name, identity.student_id)
-            if key in seen:
-                raise ValidationError(f"Duplicate roster identity: {key}")
-            seen.add(key)
-            result.append(identity)
+        if sheet_name is not None and sheet_name not in book.sheetnames:
+            raise ValidationError(f"名册里没有名为“{sheet_name}”的工作表。")
+        found = []
+        for sheet in ([book[sheet_name]] if sheet_name is not None else book.worksheets):
+            header = next(sheet.iter_rows(max_row=1, values_only=True), ())
+            columns = _roster_columns(header)
+            if columns is not None:
+                found.append((sheet, columns))
+        if not found:
+            raise ValidationError("名册里找不到学生名单。第一行需要有“班号”和“姓名”两列（“班级”列可选）。")
+        without_class = [sheet.title for sheet, columns in found if columns["class_name"] is None]
+        if without_class and class_name is None:
+            raise ValidationError(f"名册的工作表“{'、'.join(without_class)}”没有“班级”列，请填写班级。")
+        if not without_class and class_name is not None:
+            raise ValidationError("名册已有“班级”列，请不要另外填写班级。")
+        result, seen = [], {}
+        for sheet, columns in found:
+            for number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), 2):
+                values = {key: roster_text(row[index]) if index is not None and index < len(row) else ""
+                          for key, index in columns.items()}
+                if not any(values.values()):
+                    continue
+                if columns["class_name"] is None:
+                    values["class_name"] = class_name
+                place = f"工作表“{sheet.title}”第 {number} 行"
+                missing = [label for key, label in (("class_name", "班级"), ("student_id", "班号"), ("student_name", "姓名"))
+                           if not values[key]]
+                if missing:
+                    raise ValidationError(f"名册{place}缺少{'、'.join(missing)}。")
+                identity = Identity.from_dict(values)
+                key = (identity.class_name, identity.student_id)
+                if key in seen:
+                    earlier, earlier_place = seen[key]
+                    if earlier.student_name != identity.student_name:
+                        raise ValidationError(
+                            f"名册里 {key[0]} 班 {key[1]} 号有两个不同的名字：{earlier_place}是“{earlier.student_name}”，"
+                            f"{place}是“{identity.student_name}”。")
+                    continue
+                seen[key] = (identity, place)
+                result.append(identity)
+        if not result:
+            raise ValidationError("名册里没有学生。")
         return result
     finally:
         book.close()

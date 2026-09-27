@@ -312,7 +312,7 @@ class CompositionWorkflow:
             try:
                 records = apply_identity_decisions(
                     submissions,
-                    read_roster(source.roster, source.roster_sheet),
+                    read_roster(source.roster, source.roster_sheet, source.roster_class),
                     read_json(source.identity_decisions),
                     require_complete=False,
                 )
@@ -700,7 +700,7 @@ class CompositionWorkflow:
         submissions = read_existing_split(source.split_pile)
         records = apply_identity_decisions(
             submissions,
-            read_roster(source.roster, source.roster_sheet),
+            read_roster(source.roster, source.roster_sheet, source.roster_class),
             read_json(source.identity_decisions),
             require_complete=True,
         )

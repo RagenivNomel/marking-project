@@ -92,7 +92,7 @@ def prepare_identity_suggestions(source: AssignmentSource, matcher) -> None:
     if source.split_pile is None or source.roster is None or not source.roster.is_file():
         return
     submissions = read_existing_split(source.split_pile)
-    ensure_suggestions(source.split_pile, submissions, read_roster(source.roster, source.roster_sheet), matcher)
+    ensure_suggestions(source.split_pile, submissions, read_roster(source.roster, source.roster_sheet, source.roster_class), matcher)
 
 
 def build_identity_review(source: AssignmentSource, inspection: Inspection, language: str = "zh") -> dict:
@@ -127,7 +127,7 @@ def build_identity_review(source: AssignmentSource, inspection: Inspection, lang
         }
 
     submissions = read_existing_split(source.split_pile)
-    roster = read_roster(source.roster, source.roster_sheet)
+    roster = read_roster(source.roster, source.roster_sheet, source.roster_class)
     decisions = {item["source_pdf"]: item for item in _existing_decisions(source)}
     suggestions = read_suggestions(source.split_pile)
     roster_items = [
@@ -199,7 +199,7 @@ def save_identity_confirmations(source: AssignmentSource, selections: list[dict]
     if source.split_pile is None or source.roster is None:
         raise ValidationError("Composition folder and class roster are required")
     submissions = read_existing_split(source.split_pile)
-    roster = read_roster(source.roster, source.roster_sheet)
+    roster = read_roster(source.roster, source.roster_sheet, source.roster_class)
     by_submission = {item.source_pdf: item for item in submissions}
     target = managed_decision_path(source)
     existing = {item["source_pdf"]: dict(item) for item in _existing_decisions(source)}
