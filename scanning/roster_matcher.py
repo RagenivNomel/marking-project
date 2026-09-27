@@ -17,7 +17,8 @@ import uuid
 
 from pdf2image import convert_from_path
 
-from grading.schemas import ROOT, Identity
+from app_paths import data_root
+from grading.schemas import Identity
 from workflow.storage import atomic_json, read_json
 
 
@@ -68,7 +69,7 @@ class CodexImageReader:
         from grading.codex_sol_grader import CodexSolGrader
         self.codex = CodexSolGrader(model=model, reasoning_effort=reasoning_effort,
                                     timeout_seconds=timeout_seconds)
-        self.workspace_parent = ROOT / "jobs" / ".codex-workspaces"
+        self.workspace_parent = data_root() / "jobs" / ".codex-workspaces"
 
     def ensure_ready(self):
         self.codex.ensure_ready()
@@ -90,7 +91,7 @@ class CodexImageReader:
                     self.codex._command(workspace, schema_path, output_path, copies),
                     cwd=str(workspace), input=prompt, capture_output=True, text=True,
                     encoding="utf-8", errors="replace", timeout=self.codex.timeout_seconds,
-                    env=_minimal_environment(), check=False,
+                    env=_minimal_environment(self.codex.codex_executable), check=False,
                 )
             except (subprocess.TimeoutExpired, OSError) as exc:
                 raise CodexInvocationError(f"Codex CLI failed: {type(exc).__name__}") from None

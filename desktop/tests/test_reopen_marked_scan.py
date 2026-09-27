@@ -110,7 +110,7 @@ class ReopenMarkedScanTests(unittest.TestCase):
             root = Path(folder)
             scan, roster = make_scan(root)
             # The app's managed config folder, kept inside this test's folder.
-            with mock.patch.object(identity_confirmation, "ROOT", root):
+            with mock.patch.object(identity_confirmation, "data_root", lambda: root):
                 def opened():
                     # What the teacher's open dialog sends: the scan and the roster.
                     return resolve_identity_companions(AssignmentSource(continuous_scan=scan, roster=roster))

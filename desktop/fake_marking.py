@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from grading.schemas import CRITERIA, ROOT
+from app_paths import data_root
+from grading.schemas import CRITERIA
 
 
-FAKE_PROJECT_DIR = ROOT / "test-runs" / "fake-marking"
+FAKE_PROJECT_DIR = data_root() / "test-runs" / "fake-marking"
 
 
 class FakeGrader:

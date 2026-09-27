@@ -10,6 +10,7 @@ import unicodedata
 
 from application.models import AssignmentSource, Inspection
 from excel.workbook import read_roster
+from app_paths import data_root
 from grading.schemas import ROOT, ValidationError
 from scanning.identity import confirm_identity
 from scanning.intake import apply_identity_decisions, read_existing_split
@@ -33,7 +34,7 @@ def managed_decision_path(source: AssignmentSource) -> Path:
         return source.identity_decisions.resolve()
     if source.split_pile is None:
         raise ValidationError("A composition folder is required for identity confirmation")
-    config_dir = (source.config_dir or (ROOT / "config")).resolve()
+    config_dir = (source.config_dir or (data_root() / "config")).resolve()
     return config_dir / f"{_decision_stem(source.split_pile)}_identity_decisions.json"
 
 

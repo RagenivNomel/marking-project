@@ -59,7 +59,9 @@ def create_app(argv=None, dev_ui=False, controller=None, identity_matcher=None, 
 
 def main():
     import argparse
+    from app_paths import add_native_tools_to_path
     from application import AssignmentSource, WorkflowController
+    add_native_tools_to_path()
     parser = argparse.ArgumentParser(description='作文工作台：只读检查与演示')
     parser.add_argument('--demo', default='home')
     parser.add_argument('--dev-ui', action='store_true', help='show the internal fixture and state review controls')

@@ -6,10 +6,10 @@ class WorkflowController:
     def __init__(self, workflow_id="sec2_hcl_composition_v1", *, project_dir=None,
                  pipeline_factory=None, render_pipeline_factory=None):
         from .workflows.registry import get_workflow
-        from grading.schemas import ROOT
+        from app_paths import data_root
         workflow_class = get_workflow(workflow_id).workflow_class
         self.workflow = workflow_class(
-            project_dir=project_dir or ROOT,
+            project_dir=project_dir or data_root(),
             pipeline_factory=pipeline_factory,
             render_pipeline_factory=render_pipeline_factory,
         )
