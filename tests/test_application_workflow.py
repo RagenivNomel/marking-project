@@ -458,16 +458,17 @@ class ApplicationWorkflowTests(unittest.TestCase):
             )
         return job_dir
 
-    def test_inspect_projects_pending_approved_duplicate_ids_and_saved_grading(self):
-        identity = self._identity()
+    def test_inspect_projects_pending_approved_and_saved_grading(self):
+        # One workbook row per student: the two submissions are different students.
         pending_store, pending_digest = self._add_workbook_row(
-            "audit-job-pending", identity, "PENDING"
+            "audit-job-pending", self._identity("016", "待审学生"), "PENDING"
         )
+        approved_identity = self._identity("017", "已审学生")
         approved_store, approved_digest = self._add_workbook_row(
-            "audit-job-approved", identity, "APPROVED"
+            "audit-job-approved", approved_identity, "APPROVED"
         )
         self._write_receipt(
-            "audit-job-approved", identity, approved_store, approved_digest
+            "audit-job-approved", approved_identity, approved_store, approved_digest
         )
 
         inspection = self._read_only_controller_call(
