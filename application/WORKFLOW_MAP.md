@@ -22,7 +22,7 @@ The real production job reaches VALIDATED/PENDING; its isolated calibration job 
 
 Per-student mock artifacts under jobs/<batch>/<job_key>/ are student_record.json, source.json, identity.json, essay.md, essay.json, grading_input.json, grading_result.json, validated_result.json, review.json, and output/. The default renderer adds student_card.png and render_receipt.json; tests may inject mock_render.json.
 
-Real jobs additionally retain source PDFs, source hashes, configuration/prompt snapshots, grading_input_manifest.json, raw_model_response.json, parsed_result.json, validation_report.json, and real_grading_bridge.json as applicable. The command-line pipeline keeps its historical default at output/<batch>/results.xlsx. The normal desktop task adapter supplies the selected task's Results/results.xlsx to that same Pipeline and stores workbook backups under jobs/<batch>/workbook_backups/. Its hidden Pipeline审计 sheet still binds job ID, class, student number, row, input digest, and pipeline status. A task reopened from the essay folder resolves that exact workbook automatically. If only an old output/<batch>/results.xlsx exists, it remains authoritative and is not moved. If both layouts exist, inspection blocks the task until the duplicate workbook location is resolved.
+Real jobs keep nothing between attempts. Each model call runs in jobs/<task>/<job_key>/work/ (prompt and configuration snapshots, the model response, and per-call validation); that folder is deleted once the workbook row is saved, and the whole essay folder except output/ is deleted before an unfinished essay is marked again. The only completion record is the workbook: an essay is done when it has a valid result row and matching audit row. The command-line pipeline keeps its historical default at output/<batch>/results.xlsx. The desktop task adapter supplies the task's <scan folder>/Results/<scan name>-<hash>/results.xlsx to that same Pipeline and stores workbook backups under jobs/<task>/workbook_backups/. Its hidden Pipeline审计 sheet still binds job ID, class, student number, row, input digest, and pipeline status. The task identity is the continuous scan's content hash, so a replaced or neighbouring scan never resolves to another scan's workbook.
 
 ## 2. Operation map
 
@@ -42,6 +42,20 @@ Real jobs additionally retain source PDFs, source hashes, configuration/prompt s
 - Behavior: hashes page geometry/content and matches each renamed PDF to exactly one continuous-PDF range; checks page counts, unique starts, and complete coverage.
 - Output/side effects: ordered SplitSubmission records only; no scan, roster, workbook, job, or grade write. Ambiguous page-content matches fail rather than guess.
 - CLI: run_pipeline.py intake --pile ... --workbook ... --decisions ... [--out ...]. Without --out it is read-only; --out writes one atomic JSON intake report.
+
+### Scanning: continuous PDF intake
+
+- Functions: `scanning.split_by_student.split_continuous_anonymous` and the
+  workflow's `prepare_source` adapter.
+- Input: one continuous scan PDF selected by the teacher; the class roster is
+  supplied separately for identity confirmation.
+- Behavior: copies the scan into an app-owned working directory, detects
+  submission boundaries, writes neutral `submission_###.pdf` files, and keeps
+  the generated manifest/name previews internal. OCR names remain evidence
+  only.
+- Repeat/resume: the working directory is keyed by the continuous PDF hash and
+  is validated on reopen; a partial or invalid workspace is surfaced rather
+  than silently reused.
 
 ### Identity and roster decisions
 
@@ -89,10 +103,10 @@ Real jobs additionally retain source PDFs, source hashes, configuration/prompt s
 ### Stage 3C application execution
 
 - Entry: `WorkflowController.execute(Action.RENDER_APPROVED, source, progress_callback=...)` -> `CompositionWorkflow.execute_feedback_generation()` -> `Pipeline.rerender(identity)`.
-- Eligibility: the workflow binds the workbook to the task's `Results/results.xlsx` for new desktop tasks (or its existing historical `output/<batch>/results.xlsx` for an old task), re-inspects the current workbook and only selects entries with a valid `APPROVED` row, no current card, and no blocking provenance issue. It performs a second inspection while holding a per-batch Stage 3C lock, so duplicate windows cannot act on stale readiness.
+- Eligibility: the workflow binds the workbook to the task's `Results/<scan name>-<hash>/results.xlsx`, re-inspects the current workbook and only selects entries with a valid `APPROVED` row, no current card, and no blocking provenance issue. It performs a second inspection while holding a per-batch Stage 3C lock, so duplicate windows cannot act on stale readiness.
 - Source of truth: `Pipeline.rerender()` calls `ExcelStore.get_render_source()` for the current approved row and matching audit. It never reads cached grading output as card content. A present checkpoint must match identity, workbook, and Excel audit digest; Stage 3B's `VALIDATED` checkpoint is allowed because Excel approval is the human gate.
 - Rendering: `ApprovedFeedbackRenderer` adds a safe deterministic basename to audit metadata and delegates all drawing to `PillowRenderer`. Default Pipeline calls retain `student_card.png`; Stage 3C uses `班级-班号-姓名-作文体检卡.png`. Visual Master v1.2, layout, font, eight criteria, and line-fitting logic are unchanged.
-- Output: the matching internal task folder `jobs/<batch>/<job_key>/output/` stores the rendered PNG, `render_receipt.json`, and `render_attempt.json`. For new desktop tasks, the adapter atomically publishes a byte-identical PNG to `<essay-folder>/Results/Feedback Cards/`; the publication path and hash are recorded in the internal receipt and checked together with the original render. Receipts and attempt records stay internal. The receipt retains the approved Excel values, workbook/row/job/digest, layout/font/master hashes, PNG dimensions, and image hashes. The directory beside the workbook contains only results.xlsx and Feedback Cards (with PNG files).
+- Output: the matching internal task folder `jobs/<batch>/<job_key>/output/` stores the rendered PNG, `render_receipt.json`, and `render_attempt.json`. For desktop tasks, the adapter atomically publishes a byte-identical PNG to the task's `Results/<scan name>-<hash>/Feedback Cards/`; the publication path and hash are recorded in the internal receipt and checked together with the original render. Receipts and attempt records stay internal. The receipt retains the approved Excel values, workbook/row/job/digest, layout/font/master hashes, PNG dimensions, and image hashes. The directory beside the workbook contains only results.xlsx and Feedback Cards (with PNG files).
 - Progress and completion: progress events are emitted per student. A completion is counted only after a new Stage 1 inspection verifies the receipt and PNG against the current Excel row. Rendering does not call grading, Codex, or a model and does not write to the workbook or source PDF.
 - Partial failure: each row is isolated. Completed outputs remain; a failed row keeps its approved Excel state and writes technical failure details to `render_attempt.json`. A later action re-inspects and targets only rows still ready to render. Duplicate visible filenames are rejected before any card is rendered.
 - Safe rerender: sequential repeat action finds no eligible row and cannot overwrite a verified card. Teacher edits after an existing render make the old receipt stale and Stage 1 blocks the automatic action. The existing direct `Pipeline.rerender()` API can safely regenerate from current approved Excel when explicitly called; the teacher UI does not bypass the stale-receipt warning in this stage.

@@ -57,6 +57,7 @@ Item {
         NextActionPanel {
             Layout.fillWidth: true
             visible: !teacherFlow.identityReview.visible
+                     && teacherFlow.flow.step !== "review"
                      && !(teacherFlow.flow.step === "marking" && Object.keys(teacherFlow.appState.progress || {}).length > 0)
                      && !(teacherFlow.appState.progress && teacherFlow.appState.progress.operation === "render"
                           && teacherFlow.appState.progress.running === true)

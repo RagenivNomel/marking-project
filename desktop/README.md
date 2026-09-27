@@ -8,10 +8,10 @@ review and feedback-card generation remain outside this stage.
 
 ## Launch the normal teacher interface
 
-Double-click `launch-desktop.cmd`, or run this from the project folder:
+Double-click `Marking App.cmd`, or run this from the project folder:
 
 ```powershell
-.\launch-desktop.cmd
+& ".\Marking App.cmd"
 ```
 
 The normal interface opens with **Choose Essays / 选择作文**. Its new-task selector asks for the essay PDF folder and class roster only; results and card destinations are managed by the app. After existing evidence is loaded,
@@ -23,15 +23,24 @@ retains its inspection controls; Windows keeps native dragging and window button
 To start in English:
 
 ```powershell
-.\launch-desktop.cmd --language en
+& ".\Marking App.cmd" --language en
 ```
 
-The launcher uses an isolated `.desktop-deps` folder. It does not change
-production `app.py` or production requirements. Its direct equivalent is:
+The launcher runs the project's own `.venv` (Python 3.12). Create it once
+from the project folder:
 
 ```powershell
-python -B -X utf8 -m desktop
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-desktop.txt
 ```
+
+The launcher's direct equivalent is:
+
+```powershell
+.venv\Scripts\python.exe -B -X utf8 -m desktop
+```
+
+Continuous-scan intake also needs the Tesseract and Poppler programs on `PATH`.
 
 ## Developer and QA interface
 
@@ -39,13 +48,13 @@ The original fourteen-state selector, navigation sidebar and workflow tabs are
 preserved only in the clearly marked developer interface:
 
 ```powershell
-.\launch-desktop.cmd --dev-ui
+& ".\Marking App.cmd" --dev-ui
 ```
 
 Open a specific fixture with `--demo`, for example:
 
 ```powershell
-.\launch-desktop.cmd --dev-ui --demo marking
+& ".\Marking App.cmd" --dev-ui --demo marking
 ```
 
 `--demo` is intentionally ignored unless `--dev-ui` is also present, so fixture
@@ -53,10 +62,12 @@ states cannot replace the normal teacher journey accidentally.
 
 ## Stage 3A: confirm student information
 
-When a submission folder contains split PDFs, the normal **选择作文** dialog
-also asks for **学生名册 / Class Roster**. It can use a local class roster
+The normal **选择作文** dialog asks for one continuous-scan PDF and a
+**学生名册 / Class Roster**. The app creates an internal split workspace,
+including the page-boundary metadata and optional name previews; the teacher
+does not supply or repair a manifest. It can use a local class roster
 workbook. The app also attaches an existing project-owned identity-decision
-file using the folder's deterministic name.
+file using the scan's deterministic working name.
 
 If Stage 1 has already received strong roster decisions, the read is immediately
 resolved. Otherwise the workspace shows **学生资料确认** rather than one error
@@ -73,19 +84,19 @@ are confirmed and the selected task has no blocking issue.
 ## Stage 3B: real marking
 
 Marking runs in a Qt worker thread. It uses the production `run_real_batch` /
-`run_real_pdf` / `CalibrationPipeline` path, one fresh isolated Luna xhigh model
-context per student. Results are validated and written to the assignment's
-single results workbook as `PENDING`, one student at a time. Each task uses a
-stable app-owned batch folder under `jobs/`; new tasks write the authoritative
-workbook to `<essay-folder>/Results/results.xlsx`. Reopening the same essay
-folder rediscovers that workbook automatically. Historical tasks with only
-`output/<batch>/results.xlsx` continue to use that workbook without moving it.
+`CalibrationPipeline` path, one fresh isolated Luna xhigh model context per
+student. Results are validated and written to the assignment's single results
+workbook as `PENDING`, one student at a time. Each task is identified by its
+scan's content hash and owns `jobs/<task>/` plus
+`<scan folder>/Results/<scan name>-<hash>/results.xlsx`; reopening the same
+scan rediscovers that workbook automatically.
 
-Start/Continue marking processes only essays without an authoritative workbook
-result row and matching audit record. Committed rows, including `APPROVED` rows
-and teacher-edited wording, are left unchanged. Raw, parsed, validated, and
-interrupted attempt artifacts are diagnostic only; there is no separate Retry
-operation, and an unfinished essay receives a fresh isolated model attempt.
+Start/Continue marking processes only essays without a valid workbook result
+row and matching audit row. Committed rows, including `APPROVED` rows and
+teacher-edited wording, are left unchanged. Any other essay is not done: its
+working files are discarded and it gets a fresh isolated model attempt. There
+is no partial resume and no separate Retry operation. If every essay in a run
+fails, the task shows "Marking could not start" with the first error.
 Successful essays stay saved when a later essay fails.
 While marking runs, **Cancel Marking** stops the queue from starting more essays.
 The essays already in progress finish and save before the batch stops; essays not
@@ -122,17 +133,18 @@ re-inspects those persisted artifacts.
 
 ## Inspect an existing assignment
 
-The normal **选择作文** dialog accepts a submission folder and class roster.
-Results are discovered automatically. Workbook and evidence selectors remain
-available in the developer import workflow. Explicit existing
-locations can also be supplied at launch:
+The normal **选择作文** dialog accepts a continuous-scan PDF and class roster.
+Results are discovered automatically. Workbook and evidence selectors, plus
+the legacy split-pile selector, remain available in the developer import
+workflow. Explicit existing locations can also be supplied at launch:
 
 ```powershell
-.\launch-desktop.cmd --workbook $env:LOCAL_RESULTS_WORKBOOK --job-root $env:LOCAL_JOB_ROOT
+& ".\Marking App.cmd" --workbook $env:LOCAL_RESULTS_WORKBOOK --job-root $env:LOCAL_JOB_ROOT
 ```
 
 Optional arguments include `--receipt-root` (repeatable), `--split-pile`,
-`--roster`, `--identity-decisions`, `--language`, and `--reduced-motion`.
+`--continuous-scan`, `--roster`, `--identity-decisions`, `--language`, and
+`--reduced-motion`.
 Returning home does not create a persistent recent-task database. The current
 assignment view is rebuilt from the selected files and saved marking artifacts.
 

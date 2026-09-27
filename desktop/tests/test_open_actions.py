@@ -125,14 +125,14 @@ class OpenActionTests(unittest.TestCase):
         self.assertFalse(no_card_state["feedbackCardsAvailable"])
         self.assertFalse(no_card_state["teacherFlow"]["primaryActionEnabled"])
 
-    def test_normal_new_task_dialog_requires_only_essay_folder_and_roster(self):
+    def test_normal_new_task_dialog_requires_only_continuous_scan_and_roster(self):
         dialog = (Path(__file__).resolve().parents[1] / "qml" / "InspectPathsDialog.qml").read_text(encoding="utf-8")
 
         self.assertIn('visible: dialog.developerMode; label: I18n.tr("审核工作簿")', dialog)
         self.assertIn('visible: dialog.developerMode; text: I18n.tr("选择 Excel 文件")', dialog)
         self.assertIn('visible: dialog.developerMode; label: I18n.tr("批改作业目录")', dialog)
         self.assertIn('visible: dialog.developerMode; label: I18n.tr("输出回执目录")', dialog)
-        self.assertIn('splitPileField.value.trim().length > 0 && rosterField.value.trim().length > 0', dialog)
+        self.assertIn('continuousScanField.value.trim().length > 0 && rosterField.value.trim().length > 0', dialog)
         self.assertIn('体检卡文件夹会由应用自动管理', dialog)
 
 

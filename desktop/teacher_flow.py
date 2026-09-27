@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from application.models import Action, Inspection, DISPOSABLE_ATTENTION_CODES
+from application.models import Action, Inspection
 
 
 STAGE_KEYS = ("preparation", "marking", "review", "feedback")
@@ -84,16 +84,12 @@ def _inspection_view(inspection: Inspection) -> dict[str, Any]:
     ]
     for submission in inspection.submissions:
         for item in submission.attention:
-            if item.code in DISPOSABLE_ATTENTION_CODES:
-                continue
             attention.append({
                 "details": f"{item.code}\n{item.technical_details}",
                 "message": item.message,
             })
     rows = [
-        {"tone": "attention" if any(
-            a.code not in DISPOSABLE_ATTENTION_CODES for a in item.attention
-        ) else "", "status": item.review_status or ""}
+        {"tone": "attention" if item.attention else "", "status": item.review_status or ""}
         for item in inspection.submissions
     ]
     actions = [
@@ -148,16 +144,7 @@ def _attention_items(state: Mapping[str, Any]) -> list[Any]:
     # this fallback for small hand-built projections and future adapters.
     if not items:
         items = [row for row in state.get("rows", ()) if isinstance(row, Mapping) and row.get("tone") == "attention"]
-    filtered = []
-    for item in items:
-        if not isinstance(item, Mapping):
-            filtered.append(item)
-            continue
-        details = str(item.get("details") or "")
-        code = details.splitlines()[0].strip() if details else ""
-        if code not in DISPOSABLE_ATTENTION_CODES:
-            filtered.append(item)
-    return filtered
+    return items
 
 
 def _attention_codes(items: list[Any]) -> set[str]:

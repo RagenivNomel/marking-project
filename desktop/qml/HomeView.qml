@@ -8,26 +8,119 @@ Item {
     property string demoKey: "home"
     property bool reducedMotion: false
     property bool developerMode: false
+    property var workflows: []
+    property var selectedWorkflow: ({})
+    readonly property bool workflowChosen: Boolean(home.selectedWorkflow && home.selectedWorkflow.id)
     signal navigateRequested(string view)
     signal inspectRequested()
-    implicitHeight: home.developerMode ? developerPage.implicitHeight : teacherPage.implicitHeight
+    signal workflowSelected(string workflowId)
+    signal workflowListRequested()
+    implicitHeight: home.developerMode ? developerPage.implicitHeight
+        : home.workflowChosen ? teacherPage.implicitHeight : workflowPage.implicitHeight
 
     ColumnLayout {
-        id: teacherPage
-        visible: !home.developerMode
+        id: workflowPage
+        visible: !home.developerMode && !home.workflowChosen
         anchors.left: parent.left
         anchors.right: parent.right
         spacing: 28
 
         Text {
             textFormat: Text.PlainText; Layout.fillWidth: true
-            text: I18n.choose("中二高华作文批改", "Secondary 2 Higher Chinese Composition")
+            text: I18n.choose("选择工作流程", "Choose a Workflow")
             color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.screenTitleSize
             font.weight: Font.Bold; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
         }
         Text {
             textFormat: Text.PlainText; Layout.fillWidth: true
-            text: I18n.choose("选择作文 PDF 文件夹和学生名册，然后跟随页面上的下一步。", "Choose the essay PDF folder and class roster, then follow the next step shown here.")
+            text: I18n.choose("选择这次要使用的工作流程。", "Choose the workflow to use for this task.")
+            color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize
+            horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
+        }
+        Repeater {
+            model: home.workflows
+            delegate: NeoCard {
+                required property var modelData
+                Layout.fillWidth: true
+                Layout.maximumWidth: 760
+                Layout.alignment: Qt.AlignHCenter
+                fill: Theme.card
+                padding: 28
+                content: RowLayout {
+                    spacing: 20
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        Text {
+                            textFormat: Text.PlainText; Layout.fillWidth: true
+                            text: I18n.choose(modelData.nameZh, modelData.nameEn)
+                            color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.cardTitleSize
+                            font.weight: Font.Bold; wrapMode: Text.Wrap
+                        }
+                        Text {
+                            textFormat: Text.PlainText; Layout.fillWidth: true
+                            text: I18n.choose(modelData.descriptionZh, modelData.descriptionEn)
+                            color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                    NeoButton {
+                        objectName: "selectWorkflow_" + modelData.id
+                        text: I18n.choose("选择", "Select")
+                        primary: true
+                        reducedMotion: home.reducedMotion
+                        onClicked: home.workflowSelected(modelData.id)
+                    }
+                }
+            }
+        }
+        // Placeholder only: shows that more prebuilt workflows can be added here.
+        NeoCard {
+            objectName: "workflowPlaceholder"
+            Layout.fillWidth: true
+            Layout.maximumWidth: 760
+            Layout.alignment: Qt.AlignHCenter
+            fill: Theme.canvas
+            padding: 28
+            content: RowLayout {
+                spacing: 20
+                Rectangle {
+                    width: 56; height: 64; radius: 9
+                    color: Theme.cyan; border.color: Theme.ink; border.width: 3
+                    Text { anchors.centerIn: parent; text: "+"; color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: 40; font.weight: Font.Bold }
+                }
+                Text {
+                    textFormat: Text.PlainText; Layout.fillWidth: true
+                    text: I18n.choose("添加新工作流程", "Add New Workflows")
+                    color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.cardTitleSize
+                    font.weight: Font.Bold; wrapMode: Text.Wrap
+                }
+            }
+        }
+    }
+
+    ColumnLayout {
+        id: teacherPage
+        visible: !home.developerMode && home.workflowChosen
+        anchors.left: parent.left
+        anchors.right: parent.right
+        spacing: 28
+
+        NeoButton {
+            objectName: "allWorkflowsButton"
+            text: I18n.choose("← 全部工作流程", "← All Workflows")
+            reducedMotion: home.reducedMotion
+            onClicked: home.workflowListRequested()
+        }
+        Text {
+            textFormat: Text.PlainText; Layout.fillWidth: true
+            text: home.workflowChosen ? I18n.choose(home.selectedWorkflow.nameZh, home.selectedWorkflow.nameEn) : ""
+            color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.screenTitleSize
+            font.weight: Font.Bold; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
+        }
+        Text {
+            textFormat: Text.PlainText; Layout.fillWidth: true
+            text: I18n.choose("选择连续扫描 PDF 和学生名册，然后跟随页面上的下一步。", "Choose the continuous-scan PDF and class roster, then follow the next step shown here.")
             color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize
             horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
         }

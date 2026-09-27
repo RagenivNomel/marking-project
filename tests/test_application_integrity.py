@@ -99,15 +99,15 @@ class ApplicationIntegrityTests(unittest.TestCase):
         self.assertIn("CONFIG_INVALID", {a.code for a in result.attention})
         self.assertEqual([a.action for a in result.available_actions], [Action.RESOLVE_ATTENTION])
 
-    def test_missing_checkpoint_does_not_offer_new_marking(self):
+    def test_orphan_working_files_are_not_results(self):
         f = self.fixture
         directory = f.jobs / "orphan"
         directory.mkdir(parents=True)
         (directory / "grading_result.json").write_text("{}", encoding="utf-8")
+        (directory / "student_record.json").write_text("{", encoding="utf-8")
         result = f.controller.inspect(f._source(job_roots=(f.jobs,)))
-        self.assertEqual(result.summary["submissions"], 1)
-        self.assertIn("CHECKPOINT_MISSING", {a.code for a in result.submissions[0].attention})
-        self.assertNotIn(Action.PREPARE_SUBMISSIONS, {a.action for a in result.available_actions})
+        self.assertEqual(result.summary["submissions"], 0)
+        self.assertEqual(result.summary["blocking_errors"], 0)
         self.assertNotIn(Action.RUN_MARKING, {a.action for a in result.available_actions})
 
     def test_conflicting_receipts_do_not_advertise_current_output(self):
@@ -123,15 +123,6 @@ class ApplicationIntegrityTests(unittest.TestCase):
         result = f.controller.inspect(f._source(workbook=f.workbook, receipt_roots=(f.receipts,)))
         self.assertFalse(result.submissions[0].rendered)
         self.assertNotIn(Action.VIEW_OUTPUTS, {a.action for a in result.available_actions})
-
-    def test_missing_referenced_calibration_record_needs_attention(self):
-        f = self.fixture
-        identity = f._identity()
-        split, _, _, pdf = f._write_split_source(identity)
-        directory = f._write_checkpoint(identity, pdf)
-        (directory / "real_grading_bridge.json").write_text(json.dumps({"calibration_job": str(f.root / "missing-child")}), encoding="utf-8")
-        result = f.controller.inspect(f._source(job_roots=(f.jobs,)))
-        self.assertIn("BRIDGE_EVIDENCE_MISSING", {a.code for a in result.submissions[0].attention})
 
 
 if __name__ == "__main__":

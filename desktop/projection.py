@@ -1,7 +1,7 @@
 """Transient bilingual presentation of Stage 1 models; no new assessment authority."""
-from application.models import Inspection, AssignmentSource, DISPOSABLE_ATTENTION_CODES
+from application.models import Inspection, AssignmentSource
 from desktop.teacher_flow import derive_teacher_flow
-from application.workflows.task_storage import teacher_output_paths
+from application.workflows.task_storage import task_output_paths
 
 SECTIONS = {
     'zh': ('作文准备', 'AI批改', '教师审核', '反馈输出'),
@@ -28,9 +28,7 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
                                  if s.class_name and s.student_id})
     summary['identity_confirmed'] = sum(s.identity_confirmed for s in inspection.submissions)
     for index, item in enumerate(inspection.submissions, 1):
-        actionable_attention = tuple(
-            a for a in item.attention if a.code not in DISPOSABLE_ATTENTION_CODES
-        )
+        actionable_attention = item.attention
         if actionable_attention:
             status, tone = ('△ Needs attention' if en else '△ 需要处理'), 'attention'
         elif item.workbook_valid and item.review_status == 'PENDING':
@@ -56,11 +54,8 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
         if item.ready_to_render:
             facets.append('Passes pre-generation checks' if en else '符合生成前检查')
         submission_label = 'Submission ID' if en else '作文标识'
-        record_label = 'Saved record' if en else '保存记录'
-        none_label = 'None' if en else '无'
         separator = ': ' if en else '：'
         technical = '\n'.join([f'{submission_label}{separator}{item.submission_id}', *item.evidence,
-                               f'{record_label}{separator}{item.checkpoint_state or none_label}',
                                *[f'{a.code}: {a.technical_details}' for a in item.attention]])
         essay = f'Submission {index:03}' if en else f'作文 {index:03}'
         rows.append(dict(id=item.submission_id, ordinal=f'{index:03}', identity=identity,
@@ -85,19 +80,21 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
     if source:
         # Keep implementation IDs, receipts, and checkpoints out of the normal
         # teacher details. The teacher's input references remain inspectable.
-        references = [str(p) for p in (source.split_pile, source.roster) if p]
+        references = [str(p) for p in (source.continuous_scan or source.split_pile, source.roster) if p]
         if source.workbook is not None:
             results_workbook = source.workbook.resolve()
         elif source.results_directory is not None:
             results_workbook = source.results_directory / "results.xlsx"
         elif source.split_pile is not None:
-            results_workbook = teacher_output_paths(source.split_pile).workbook
+            try:
+                results_workbook = task_output_paths(source).workbook
+            except (OSError, ValueError):
+                results_workbook = None
         feedback_cards_dir = source.feedback_cards_directory
         if feedback_cards_dir is None and results_workbook is not None:
             feedback_cards_dir = results_workbook.parent / "Feedback Cards"
     results_available = bool(
         results_workbook is not None and results_workbook.is_file()
-        and not (source and source.output_location_conflict)
     )
     feedback_available = bool(
         summary.get("rendered", 0) > 0
@@ -105,8 +102,13 @@ def project(inspection: Inspection, source: AssignmentSource | None = None,
         and feedback_cards_dir.is_dir()
         and any(path.is_file() for path in feedback_cards_dir.glob("*-作文体检卡.png"))
     )
-    subtitle = (f'{inspection.display_name} · {summary["submissions"]} submissions / {summary["identities"]} students'
-                if en else f'{inspection.display_name} · {summary["submissions"]}份作文 / {summary["identities"]}名学生')
+    if summary["submissions"] and not summary["identities"]:
+        # Before confirmation "0 students" reads like an error.
+        subtitle = (f'{inspection.display_name} · {summary["submissions"]} submissions · Student identities not yet confirmed'
+                    if en else f'{inspection.display_name} · {summary["submissions"]}份作文 · 学生身份尚未确认')
+    else:
+        subtitle = (f'{inspection.display_name} · {summary["submissions"]} submissions / {summary["identities"]} students'
+                    if en else f'{inspection.display_name} · {summary["submissions"]}份作文 / {summary["identities"]}名学生')
     notice = ('Local assignment · Saved files were checked; marking is not running.'
               if en else '本地作文任务 · 已检查保存的资料；当前没有运行批改。')
     state = dict(demo=False, scenario='real', view='workspace', section=2, title=title,

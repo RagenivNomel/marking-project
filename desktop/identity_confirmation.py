@@ -10,9 +10,11 @@ import unicodedata
 
 from application.models import AssignmentSource, Inspection
 from excel.workbook import read_roster
+from app_paths import data_root
 from grading.schemas import ROOT, ValidationError
 from scanning.identity import confirm_identity
 from scanning.intake import apply_identity_decisions, read_existing_split
+from scanning.roster_matcher import ensure_suggestions, header_preview_path, read_suggestions
 from workflow.storage import atomic_json, read_json
 
 
@@ -32,8 +34,16 @@ def managed_decision_path(source: AssignmentSource) -> Path:
         return source.identity_decisions.resolve()
     if source.split_pile is None:
         raise ValidationError("A composition folder is required for identity confirmation")
-    config_dir = (source.config_dir or (ROOT / "config")).resolve()
+    config_dir = (source.config_dir or (data_root() / "config")).resolve()
     return config_dir / f"{_decision_stem(source.split_pile)}_identity_decisions.json"
+
+
+def with_decisions_dir(source: AssignmentSource, directory: Path | None) -> AssignmentSource:
+    """Keep this task's confirmations in ``directory`` (fake-marking test runs)."""
+    if directory is None or source.split_pile is None or source.identity_decisions is not None:
+        return source
+    path = Path(directory) / f"{_decision_stem(source.split_pile)}_identity_decisions.json"
+    return replace(source, identity_decisions=path.resolve())
 
 
 def resolve_identity_companions(source: AssignmentSource) -> AssignmentSource:
@@ -75,6 +85,16 @@ def _existing_decisions(source: AssignmentSource) -> list[dict]:
     return value
 
 
+def prepare_identity_suggestions(source: AssignmentSource, matcher) -> None:
+    """Guess a roster student for each submission once, before the teacher reviews."""
+
+    source = resolve_identity_companions(source)
+    if source.split_pile is None or source.roster is None or not source.roster.is_file():
+        return
+    submissions = read_existing_split(source.split_pile)
+    ensure_suggestions(source.split_pile, submissions, read_roster(source.roster, source.roster_sheet), matcher)
+
+
 def build_identity_review(source: AssignmentSource, inspection: Inspection, language: str = "zh") -> dict:
     """Build compact QML data without changing any source or decision file."""
 
@@ -109,6 +129,7 @@ def build_identity_review(source: AssignmentSource, inspection: Inspection, lang
     submissions = read_existing_split(source.split_pile)
     roster = read_roster(source.roster, source.roster_sheet)
     decisions = {item["source_pdf"]: item for item in _existing_decisions(source)}
+    suggestions = read_suggestions(source.split_pile)
     roster_items = [
         {
             "key": _key(item.class_name, item.student_id),
@@ -133,15 +154,19 @@ def build_identity_review(source: AssignmentSource, inspection: Inspection, lang
         if is_confirmed:
             confirmed += 1
             continue
-        decision = decisions.get(submission.source_pdf, {})
+        # A teacher decision wins; otherwise pre-select the model's guess.
+        guess = decisions.get(submission.source_pdf) or suggestions.get(submission.source_pdf) or {}
         selected = ""
-        if decision.get("class_name") is not None and decision.get("student_id") is not None:
-            selected = _key(str(decision["class_name"]), str(decision["student_id"]))
+        if guess.get("class_name") is not None and guess.get("student_id") is not None:
+            selected = _key(str(guess["class_name"]), str(guess["student_id"]))
         if not selected:
             candidates = by_exact_name.get(_normalized_name(pdf.stem), [])
             if len(candidates) == 1:
                 selected = candidates[0]["key"]
-        preview = (pile / "_name_previews" / submission.name_preview).resolve() if submission.name_preview else None
+        preview = header_preview_path(pile, submission)
+        if not preview.is_file():
+            # Older split folders only; new splits no longer save name previews.
+            preview = (pile / "_name_previews"/ submission.name_preview).resolve() if submission.name_preview else None
         rows.append({
             "submissionId": submission_id,
             "sourcePdf": submission.source_pdf,

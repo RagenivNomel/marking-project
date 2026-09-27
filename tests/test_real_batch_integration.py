@@ -12,8 +12,7 @@ from grading.schemas import CRITERIA, Identity
 from grading.sol_grader import SolGrader
 from tests.local_temp import local_test_directory
 from workflow.calibration_pipeline import CalibrationPipeline
-from workflow.pipeline import Pipeline
-from workflow.storage import read_json
+from workflow.pipeline import Pipeline, job_key
 
 
 def valid_response(identity):
@@ -33,6 +32,18 @@ def valid_response(identity):
         },
         "evidence": [{"judgment": "重点突出", "page_numbers": [1], "rationale": "中段的主要行动集中呈现。"}],
     }
+
+
+def working_state(essay_dir):
+    """Every file in an essay folder except Stage 3C card output."""
+    essay_dir = Path(essay_dir)
+    if not essay_dir.is_dir():
+        return []
+    return sorted(
+        path.relative_to(essay_dir).as_posix()
+        for path in essay_dir.rglob("*")
+        if path.is_file() and path.relative_to(essay_dir).parts[0] != "output"
+    )
 
 
 def raw_response(value):
@@ -156,10 +167,8 @@ class RealBatchIntegrationTests(unittest.TestCase):
         self.assertEqual(len(result["validated"]), 2)
         self.assertEqual(result["failed"], [])
         self.assertEqual(len(transport.calls), 2)
-        for index, identity in enumerate(self.identities[:2]):
-            checkpoint = next((self.root / "jobs" / "real-batch").glob(f"student_{identity.student_id}_*/student_record.json"))
-            self.assertEqual(read_json(checkpoint)["state"], "VALIDATED")
-            self.assertTrue((checkpoint.parent / "real_grading_bridge.json").exists())
+        for identity in self.identities[:2]:
+            self.assertEqual(working_state(self.root / "jobs" / "real-batch" / job_key(identity)), [])
         book = load_workbook(result["workbook"], read_only=True, data_only=True)
         try:
             self.assertEqual([cell.value for cell in book[SHEET][1]], HEADERS)
@@ -192,9 +201,8 @@ class RealBatchIntegrationTests(unittest.TestCase):
                     self.assertEqual([row[1] for row in rows], ["01", "03"])
                 finally:
                     book.close()
-                failed_job = next((self.root / "jobs" / f"real-batch-{label}").glob("student_02_*/student_record.json"))
-                self.assertEqual(read_json(failed_job)["state"], "TRANSCRIBED")
-                self.assertFalse((failed_job.parent / "grading_result.json").exists())
+                # A failed essay is not done and keeps nothing to resume from.
+                self.assertEqual(working_state(self.root / "jobs" / f"real-batch-{label}" / job_key(self.identities[1])), [])
 
 
 if __name__ == "__main__":

@@ -2,11 +2,6 @@
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-LOCAL_DEPS = ROOT / '.desktop-deps'
-if LOCAL_DEPS.is_dir():
-    sys.path.insert(0, str(LOCAL_DEPS))
-
 def prefers_reduced_motion():
     if sys.platform == 'win32':
         import ctypes
@@ -29,7 +24,8 @@ def polish_native_window(window):
     except (AttributeError, OSError, ValueError):
         pass
 
-def create_app(argv=None, dev_ui=False, controller=None):
+def create_app(argv=None, dev_ui=False, controller=None, identity_matcher=None, identity_decisions_dir=None,
+               controller_factory=None):
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
     from PySide6.QtQml import QQmlApplicationEngine
@@ -46,7 +42,9 @@ def create_app(argv=None, dev_ui=False, controller=None):
     font = QFont(font_name)
     font.setPixelSize(16)
     app.setFont(font)
-    bridge = DesktopBridge(controller=controller)
+    bridge = DesktopBridge(controller=controller, identity_matcher=identity_matcher,
+                           identity_decisions_dir=identity_decisions_dir,
+                           controller_factory=controller_factory)
     bridge.setReducedMotion(prefers_reduced_motion())
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty('bridge', bridge)
@@ -61,7 +59,9 @@ def create_app(argv=None, dev_ui=False, controller=None):
 
 def main():
     import argparse
+    from app_paths import add_native_tools_to_path
     from application import AssignmentSource, WorkflowController
+    add_native_tools_to_path()
     parser = argparse.ArgumentParser(description='作文工作台：只读检查与演示')
     parser.add_argument('--demo', default='home')
     parser.add_argument('--dev-ui', action='store_true', help='show the internal fixture and state review controls')
@@ -70,20 +70,44 @@ def main():
     parser.add_argument('--job-root', type=Path, action='append', default=[])
     parser.add_argument('--receipt-root', type=Path, action='append', default=[])
     parser.add_argument('--split-pile', type=Path)
+    parser.add_argument('--continuous-scan', type=Path)
     parser.add_argument('--roster', type=Path)
     parser.add_argument('--identity-decisions', type=Path)
     parser.add_argument('--project-dir', type=Path, help='isolated output and job root for a local verification task')
     parser.add_argument('--reduced-motion', action='store_true')
+    parser.add_argument('--fake-marking', action='store_true',
+                        help='test the teacher flow with instant fake marking (no marking model calls)')
+    parser.add_argument('--self-check', type=Path, metavar='REPORT',
+                        help='check the bundled tools and resources, write a JSON report and exit')
     args = parser.parse_args()
-    controller = WorkflowController(project_dir=args.project_dir) if args.project_dir else None
-    app, engine, bridge = create_app([sys.argv[0]], dev_ui=args.dev_ui, controller=controller)
+    if args.self_check:
+        from desktop.self_check import run
+        return run(args.self_check)
+    # Each workflow the teacher selects gets its own controller from this factory.
+    controller_factory = None
+    if args.project_dir:
+        controller_factory = lambda workflow_id: WorkflowController(workflow_id, project_dir=args.project_dir)
+    decisions_dir = None
+    if args.fake_marking:
+        from desktop.fake_marking import FAKE_PROJECT_DIR, fake_marking_controller
+        controller_factory = lambda workflow_id: fake_marking_controller(
+            args.project_dir or FAKE_PROJECT_DIR, workflow_id)
+        # Test confirmations must never overwrite a real task's confirmations.
+        decisions_dir = (args.project_dir or FAKE_PROJECT_DIR) / "config"
+        print('FAKE MARKING: no marking model calls; results are labelled 【测试】. '
+              'Use a copy of a scan, not a real task.', file=sys.stderr, flush=True)
+    from scanning.roster_matcher import CodexRosterMatcher
+    app, engine, bridge = create_app([sys.argv[0]], dev_ui=args.dev_ui, controller_factory=controller_factory,
+                                     identity_matcher=CodexRosterMatcher(),
+                                     identity_decisions_dir=decisions_dir)
     bridge.setLanguage(args.language)
     if args.dev_ui:
         bridge.selectDemo(args.demo)
     bridge.setReducedMotion(args.reduced_motion or prefers_reduced_motion())
-    if any((args.workbook, args.job_root, args.receipt_root, args.split_pile)):
+    if any((args.workbook, args.job_root, args.receipt_root, args.split_pile, args.continuous_scan)):
         bridge.inspect_source(AssignmentSource(workbook=args.workbook, job_roots=tuple(args.job_root),
-            receipt_roots=tuple(args.receipt_root), split_pile=args.split_pile, roster=args.roster,
+            receipt_roots=tuple(args.receipt_root), continuous_scan=args.continuous_scan,
+            split_pile=args.split_pile, roster=args.roster,
             identity_decisions=args.identity_decisions))
     return app.exec()
 

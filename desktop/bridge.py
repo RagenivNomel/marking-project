@@ -9,12 +9,16 @@ from PySide6.QtCore import QObject, Property, QRunnable, QThreadPool, Signal, Sl
 from PySide6.QtGui import QDesktopServices
 from application import AssignmentSource, WorkflowController
 from application.models import Action
+from application.workflows.registry import WORKFLOWS, get_workflow
+from application.workflows.sec2_hcl_composition_v1 import WORKFLOW_ID as ORIGINAL_WORKFLOW_ID
 from desktop.fixtures import demo_state
 from desktop.identity_confirmation import (
     DEFAULT_ROSTER,
     build_identity_review,
+    prepare_identity_suggestions,
     resolve_identity_companions,
     save_identity_confirmations,
+    with_decisions_dir,
 )
 from desktop.projection import project, set_section
 from desktop.teacher_flow import derive_teacher_flow
@@ -33,20 +37,45 @@ def _committed_results(summary):
                 return 0
     return 0
 
+def task_title(source, language):
+    """Teacher-facing task name; never the app's internal scan workspace folder."""
+    if source.continuous_scan is not None:
+        return Path(source.continuous_scan).parent.name
+    if source.workbook is not None:
+        return source.workbook.stem
+    if source.split_pile is not None:
+        return source.split_pile.name
+    return 'Local composition materials' if language == 'en' else '本地作文资料'
+
 class ReadSignals(QObject):
     finished = Signal(object, object, str)
 
 class ReadTask(QRunnable):
-    def __init__(self, controller, source, refresh):
+    def __init__(self, controller, source, refresh, identity_matcher=None, decisions_dir=None):
         super().__init__()
         self.controller, self.source, self.refresh = controller, source, refresh
+        self.identity_matcher, self.decisions_dir = identity_matcher, decisions_dir
         self.signals = ReadSignals()
 
     def run(self):
         try:
+            source = (self.controller.prepare_source(self.source)
+                      if hasattr(self.controller, 'prepare_source') else self.source)
+            source = with_decisions_dir(source, self.decisions_dir)
+            # A continuous scan has its workspace only now: reattach its saved confirmations.
+            source = resolve_identity_companions(source)
+            # Only scans the app splits itself; pre-built piles are already labelled.
+            if self.identity_matcher is not None and self.source.continuous_scan is not None:
+                try:
+                    prepare_identity_suggestions(source, self.identity_matcher)
+                except Exception:
+                    # Guessing is a convenience: the teacher can still pick by hand.
+                    traceback.print_exc()
+            source = (self.controller.bind_source(source)
+                      if hasattr(self.controller, 'bind_source') else source)
             method = self.controller.refresh_review_status if self.refresh else self.controller.inspect
-            result = method(self.source)
-            self.signals.finished.emit(result, self.source, '')
+            result = method(source)
+            self.signals.finished.emit(result, source, '')
         except Exception as exc:
             self.signals.finished.emit(None, self.source, str(exc))
 
@@ -115,9 +144,18 @@ class DesktopBridge(QObject):
     changed = Signal()
     busyChanged = Signal()
 
-    def __init__(self, controller=None, parent=None, *, open_url=None):
+    def __init__(self, controller=None, parent=None, *, open_url=None, identity_matcher=None,
+                 identity_decisions_dir=None, controller_factory=None):
         super().__init__(parent)
-        self._controller = controller or WorkflowController()
+        # Builds the controller for the workflow the teacher selects.
+        self._controller_factory = controller_factory or (
+            (lambda workflow_id: controller) if controller is not None else WorkflowController)
+        # The developer UI and command-line sources predate workflow selection
+        # and keep using the original workflow until one is selected.
+        self._controller = controller or self._controller_factory(ORIGINAL_WORKFLOW_ID)
+        self._selected_workflow = None
+        self._identity_matcher = identity_matcher
+        self._identity_decisions_dir = identity_decisions_dir
         self._open_url = open_url or QDesktopServices.openUrl
         self._language = 'zh'
         self._state = demo_state('home', self._language)
@@ -152,6 +190,47 @@ class DesktopBridge(QObject):
     def defaultRosterPath(self):
         return str(DEFAULT_ROSTER) if DEFAULT_ROSTER.is_file() else ''
 
+    @Property('QVariantList', constant=True)
+    def workflows(self):
+        return [info.to_dict() for info in WORKFLOWS]
+
+    @Property('QVariantMap', notify=changed)
+    def selectedWorkflow(self):
+        """Empty until the teacher chooses a workflow on the start page."""
+        return self._selected_workflow.to_dict() if self._selected_workflow else {}
+
+    def _clear_session(self):
+        """Forget the loaded task in memory only; saved results stay on disk."""
+        reduced = self._state['reducedMotion']
+        self._source = None
+        self._inspection = None
+        self._real_state = None
+        self._state = demo_state('home', self._language)
+        self._state['reducedMotion'] = reduced
+
+    @Slot(str)
+    def selectWorkflow(self, workflow_id):
+        """Choose a workflow; no task is read until the teacher chooses submissions."""
+        if self._busy:
+            return
+        try:
+            info = get_workflow(workflow_id)
+        except ValueError:
+            return
+        controller = self._controller_factory(info.workflow_id)
+        self._clear_session()
+        self._controller = controller
+        self._selected_workflow = info
+        self.changed.emit()
+
+    @Slot()
+    def showWorkflowList(self):
+        if self._busy:
+            return
+        self._clear_session()
+        self._selected_workflow = None
+        self.changed.emit()
+
     def _attach_identity_review(self, state, source, inspection):
         try:
             state['identityReview'] = build_identity_review(source, inspection, self._language)
@@ -178,7 +257,7 @@ class DesktopBridge(QObject):
         self._language = language
         reduced = previous['reducedMotion']
         if not previous['demo'] and self._inspection is not None and self._source is not None:
-            title = self._source.workbook.stem if self._source.workbook else (self._source.split_pile.name if self._source.split_pile else ('Local composition materials' if language == 'en' else '本地作文资料'))
+            title = task_title(self._source, language)
             state = project(self._inspection, self._source, title, language)
             self._attach_identity_review(state, self._source, self._inspection)
             state = set_section(state, previous['section'], language)
@@ -241,8 +320,8 @@ class DesktopBridge(QObject):
         self._state['reducedMotion'] = value
         self.changed.emit()
 
-    @Slot(str, str, str, str, str)
-    def inspectPaths(self, workbook, jobs, receipts, split_pile, roster):
+    @Slot(str, str, str, str, str, str)
+    def inspectPaths(self, workbook, jobs, receipts, split_pile, roster, continuous_scan):
         def one(value):
             value = value.strip().strip('"')
             if value.startswith('file:'):
@@ -252,10 +331,12 @@ class DesktopBridge(QObject):
             return tuple(one(p) for p in value.split(';') if p.strip())
         source = AssignmentSource(workbook=one(workbook), job_roots=many(jobs),
                                   receipt_roots=many(receipts), split_pile=one(split_pile),
-                                  roster=one(roster))
+                                  roster=one(roster), continuous_scan=one(continuous_scan))
         source = resolve_identity_companions(source)
-        if not any((source.workbook, source.job_roots, source.receipt_roots, source.split_pile)):
-            self._state['notice'] = ('Specify an existing workbook or composition folder, then read it.' if self._language == 'en' else '请指定已有工作簿或作文资料文件夹，然后读取。')
+        if not any((source.workbook, source.job_roots, source.receipt_roots,
+                    source.split_pile, source.continuous_scan)):
+            self._state['notice'] = ('Specify an existing workbook, composition folder, or continuous-scan PDF, then read it.'
+                                     if self._language == 'en' else '请指定已有工作簿、作文资料文件夹或连续扫描 PDF，然后读取。')
             self.changed.emit()
             return
         self.inspect_source(source)
@@ -268,9 +349,19 @@ class DesktopBridge(QObject):
             source = self._controller.bind_source(source)
         self._busy = True
         self.busyChanged.emit()
-        self._state['notice'] = ('Reading the selected local materials without changing them.' if self._language == 'en' else '正在读取指定的本地资料；不会更改文件。')
+        preparing = source.continuous_scan is not None and source.split_pile is None
+        self._state['notice'] = (
+            'Preparing the continuous scan and reading the selected local materials.'
+            if preparing and self._language == 'en' else
+            '正在整理连续扫描并读取指定的本地资料。'
+            if preparing else
+            'Reading the selected local materials without changing them.'
+            if self._language == 'en' else
+            '正在读取指定的本地资料；不会更改文件。'
+        )
         self.changed.emit()
-        task = ReadTask(self._controller, source, refresh)
+        task = ReadTask(self._controller, source, refresh, self._identity_matcher,
+                        self._identity_decisions_dir)
         task.signals.finished.connect(self._finished)
         self._task = task
         self.pool.start(task)
@@ -328,7 +419,7 @@ class DesktopBridge(QObject):
             self._state['notice'] = ('This read did not complete. The previous content remains below; check the location and try again.' if self._language == 'en' else '本次读取未完成。下方仍为上次显示的内容，请检查文件位置后重试。')
             self._state['attention'] = [dict(title=('Read did not complete' if self._language == 'en' else '资料读取未完成'), message=('Check that the selected file or folder is available. No file was changed.' if self._language == 'en' else '请检查所选文件或文件夹是否可用；文件未被修改。'), details=error)]
         else:
-            title = source.workbook.stem if source.workbook else (source.split_pile.name if source.split_pile else ('Local composition materials' if self._language == 'en' else '本地作文资料'))
+            title = task_title(source, self._language)
             self._state = set_section(project(inspection, source, title, self._language), 2, self._language)
             self._attach_identity_review(self._state, source, inspection)
             self._state['inspectedAt'] = datetime.now().strftime('%H:%M:%S')
@@ -440,7 +531,7 @@ class DesktopBridge(QObject):
         reduced = self._state["reducedMotion"]
         elapsed = self._state.get("progress", {}).get("elapsed", "—")
         if inspection is not None:
-            title = source.workbook.stem if source.workbook else (source.split_pile.name if source.split_pile else "Local composition materials")
+            title = task_title(source, self._language)
             self._state = set_section(project(inspection, source, title, self._language), 2, self._language)
             self._attach_identity_review(self._state, source, inspection)
             self._source, self._inspection = source, inspection
@@ -467,12 +558,18 @@ class DesktopBridge(QObject):
                 "saved": (f"{saved} committed result(s) are saved." if self._language == "en"
                           else f"已保存{saved}份已提交结果。"),
             }
-            if error and not self._state["attention"] and summary["marking_available"] > 0:
+            startup_problem = error
+            if not error and failures and not result.get("validated"):
+                # Every essay failed and nothing was saved: report it as a
+                # failed start rather than quietly returning to "ready".
+                first = result["failed"][0].get("error")
+                startup_problem = first.get("message") if isinstance(first, dict) else str(first)
+            if startup_problem and not self._state["attention"] and summary["marking_available"] > 0:
                 self._state["attention"].append(dict(
                     title="This assignment" if self._language == "en" else "这次任务",
                     message=("Marking could not start. Your essays are still ready; check the details before continuing."
                              if self._language == "en" else "批改未能开始，作文仍已准备好；请查看详情后继续。"),
-                    details=f"MARKING_STARTUP_FAILED\n{error}",
+                    details=f"MARKING_STARTUP_FAILED\n{startup_problem}",
                 ))
             self._state["teacherFlow"] = derive_teacher_flow(self._state, self._language)
             step = self._state["teacherFlow"]["step"]
@@ -570,7 +667,7 @@ class DesktopBridge(QObject):
         elapsed = previous_progress.get("elapsed", "—")
         result = outcome if isinstance(outcome, dict) else {}
         if inspection is not None:
-            title = source.workbook.stem if source.workbook else (source.split_pile.name if source.split_pile else "Local composition materials")
+            title = task_title(source, self._language)
             self._state = set_section(project(inspection, source, title, self._language), 3, self._language)
             self._attach_identity_review(self._state, source, inspection)
             self._source, self._inspection = source, inspection

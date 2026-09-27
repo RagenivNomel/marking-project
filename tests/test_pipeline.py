@@ -87,6 +87,22 @@ class PipelineTests(unittest.TestCase):
         record = store.get("authoritative-score-import", self.identity)
         self.assertEqual((record.topic, record.content_score, record.language_structure_score, record.total_score), ("Q2", 22, 21, 43))
 
+    def test_workbook_keeps_one_row_per_student(self):
+        result = self.pipeline.validator.validate(
+            MockGrader().grade(GradingInput(self.identity, self.source["essay"])),
+            self.identity,
+        )
+        store = ExcelStore(self.root / "one-row-per-student" / "results.xlsx", self.pipeline.validator)
+        store.ensure_draft(result, self.identity, "first-submission", "source-digest")
+        store.ensure_draft(result, self.identity, "first-submission", "source-digest")  # resume: no-op
+        with self.assertRaisesRegex(ValidationError, "lacks matching audit evidence"):
+            store.ensure_draft(result, self.identity, "second-submission", "other-digest")
+        book = load_workbook(store.path)
+        try:
+            self.assertEqual(book[SHEET].max_row, 2)
+        finally:
+            book.close()
+
     def test_production_workbook_has_approval_dropdown_and_preserves_approved_value(self):
         validated = self.pipeline.validator.validate(
             MockGrader().grade(GradingInput(self.identity, self.source["essay"])),

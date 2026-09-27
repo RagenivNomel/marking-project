@@ -46,7 +46,7 @@ def _forbid_grading_and_model_calls():
     with ExitStack() as stack:
         for owner, name in (
             (MockGrader, "grade"), (CodexSolGrader, "grade"), (SolGrader, "grade"),
-            (Pipeline, "run_mock"), (Pipeline, "run_real_pdf"), (Pipeline, "run_real_batch"),
+            (Pipeline, "run_mock"), (Pipeline, "_grade_essay"), (Pipeline, "run_real_batch"),
             (CalibrationPipeline, "prepare"), (CalibrationPipeline, "run"),
         ):
             stack.enter_context(patch.object(owner, name, side_effect=AssertionError(f"{owner.__name__}.{name} must not run in Stage 3C")))
@@ -305,10 +305,27 @@ class Stage3CRenderTests(unittest.TestCase):
         self.assertEqual(len(list(self.jobs_root.rglob("*-作文体检卡.png"))), 2)
         self.assertEqual(_digest(self.workbook), book_before)
 
+    def _relabel_row(self, job_id, identity):
+        """Give an existing row another student's identity, as in a workbook
+        written before ExcelStore refused a second row for the same student."""
+        book = load_workbook(self.workbook)
+        try:
+            audit = next(row for row in book[AUDIT_SHEET].iter_rows(min_row=2) if row[0].value == job_id)
+            audit[1].value, audit[2].value = identity.class_name, identity.student_id
+            row = book[SHEET][audit[3].value]
+            row[0].value, row[1].value, row[2].value = (
+                identity.class_name, identity.student_id, identity.student_name)
+            book.save(self.workbook)
+        finally:
+            book.close()
+        _old_identity, digest, result = self._rows[job_id]
+        self._rows[job_id] = (identity, digest, result)
+
     def test_duplicate_submission_identity_is_stopped_before_a_filename_can_overwrite(self):
         identity = self._identity("40", "重复提交学生")
         self._add_row(identity, job_id="essay-row-a")
-        self._add_row(identity, job_id="essay-row-b")
+        self._add_row(self._identity("41", "重复提交学生"), job_id="essay-row-b")
+        self._relabel_row("essay-row-b", identity)
         with _forbid_grading_and_model_calls():
             with self.assertRaisesRegex(ValueError, "same feedback-card filename"):
                 self.controller.execute(Action.RENDER_APPROVED, self.source)

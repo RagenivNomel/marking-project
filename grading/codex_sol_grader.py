@@ -6,13 +6,20 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
+import traceback
 from typing import Callable, Sequence
 import uuid
 
 from pdf2image import convert_from_bytes
 
 from .sol_grader import CredentialUnavailable, ModelCallError, SUPPORTED_MODELS, SolGradingInput
+
+
+def _marking_trace(message):
+    if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        print(f"[codex] {message}", file=sys.stderr, flush=True)
 
 
 class CodexUnavailable(CredentialUnavailable):
@@ -27,39 +34,73 @@ def _default_runner(command: Sequence[str], **kwargs):
     return subprocess.run(list(command), **kwargs)
 
 
-def _minimal_environment() -> dict[str, str]:
-    """Keep only values needed to start Codex and reach its saved ChatGPT auth."""
+def _minimal_environment(executable: str | None = None) -> dict[str, str]:
+    """Keep only values needed to start Codex and reach its saved ChatGPT auth.
+
+    macOS keeps that auth under HOME. An npm-installed Codex is a Node script,
+    so the folder it was found in (where Node usually lives too) leads PATH.
+    """
     allowed = {
         "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "TEMP", "TMP",
         "USERPROFILE", "APPDATA", "LOCALAPPDATA", "CODEX_HOME",
+        "HOME", "TMPDIR", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE",
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
     }
-    return {key: value for key, value in os.environ.items() if key.upper() in allowed}
+    env = {key: value for key, value in os.environ.items() if key.upper() in allowed}
+    if executable and Path(executable).is_absolute():
+        path_key = next((key for key in env if key.upper() == "PATH"), "PATH")
+        folder = str(Path(executable).parent)
+        entries = [entry for entry in env.get(path_key, "").split(os.pathsep) if entry and entry != folder]
+        env[path_key] = os.pathsep.join([folder, *entries])
+    return env
+
+
+def _installed_codex_candidates() -> list[Path]:
+    """Codex installs that a Finder or shortcut launch cannot see on PATH."""
+    if os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if not local_app_data:
+            return []
+        bin_root = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
+        try:
+            installed = [path / "codex.exe" for path in bin_root.iterdir()
+                         if path.is_dir() and (path / "codex.exe").is_file()]
+            return sorted(installed, key=lambda path: path.stat().st_mtime, reverse=True)
+        except OSError:
+            return []
+    home = Path.home()
+    candidates = [
+        Path("/opt/homebrew/bin/codex"),
+        Path("/usr/local/bin/codex"),
+        home / ".npm-global" / "bin" / "codex",
+        home / ".local" / "bin" / "codex",
+        home / ".volta" / "bin" / "codex",
+        home / ".bun" / "bin" / "codex",
+        Path("/Applications/Codex.app/Contents/Resources/codex"),
+    ]
+    try:
+        nvm = sorted((home / ".nvm" / "versions" / "node").glob("*/bin/codex"),
+                     key=lambda path: path.stat().st_mtime, reverse=True)
+    except OSError:
+        nvm = []
+    return [path for path in candidates + nvm if path.is_file() and os.access(path, os.X_OK)]
 
 
 def resolve_codex_executable(configured: str) -> str:
-    """Find the installed Windows CLI when the desktop launcher lacks Codex's PATH."""
+    """Find the installed CLI when the desktop launcher lacks Codex's PATH."""
     if Path(configured).is_absolute():
         return configured
     found = shutil.which(configured)
     if found:
         # CreateProcess can search a different PATH from shutil.which when a
         # minimal subprocess environment is supplied. Pass the exact file.
-        return str(Path(found).resolve())
-    if os.name != "nt" or configured.lower() not in {"codex", "codex.exe"}:
+        # Elsewhere keep the link itself: an npm link resolves into
+        # node_modules, away from the Node it needs.
+        return str(Path(found).resolve()) if os.name == "nt" else os.path.abspath(found)
+    if configured.lower() not in {"codex", "codex.exe"}:
         return configured
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        return configured
-    bin_root = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
-    try:
-        installed = [path / "codex.exe" for path in bin_root.iterdir()
-                     if path.is_dir() and (path / "codex.exe").is_file()]
-        if installed:
-            return str(max(installed, key=lambda path: path.stat().st_mtime))
-    except OSError:
-        pass
-    return configured
+    installed = _installed_codex_candidates()
+    return str(installed[0]) if installed else configured
 
 
 def render_pdf_pages(pdf_bytes: bytes, workspace: Path, dpi: int) -> list[Path]:
@@ -113,8 +154,9 @@ class CodexSolGrader:
         self.workspace_parent = Path(workspace_parent) if workspace_parent else None
 
     def _check(self, arguments: list[str]):
+        _marking_trace(f"preflight executable={self.codex_executable!r} args={arguments!r}")
         try:
-            return self.process_runner(
+            result = self.process_runner(
                 [self.codex_executable, *arguments],
                 cwd=None,
                 input=None,
@@ -123,10 +165,15 @@ class CodexSolGrader:
                 encoding="utf-8",
                 errors="replace",
                 timeout=15,
-                env=_minimal_environment(),
+                env=_minimal_environment(self.codex_executable),
                 check=False,
             )
+            _marking_trace(f"preflight returncode={result.returncode}")
+            return result
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+            _marking_trace(f"preflight exception={type(exc).__name__}: {exc}")
+            if os.environ.get("MUMS_MARKING_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}:
+                traceback.print_exc(file=sys.stderr)
             raise CodexUnavailable(f"Codex CLI preflight failed: {type(exc).__name__}") from None
 
     def ensure_ready(self):
@@ -209,7 +256,7 @@ class CodexSolGrader:
                     encoding="utf-8",
                     errors="replace",
                     timeout=self.timeout_seconds,
-                    env=_minimal_environment(),
+                    env=_minimal_environment(self.codex_executable),
                     check=False,
                 )
             except subprocess.TimeoutExpired:

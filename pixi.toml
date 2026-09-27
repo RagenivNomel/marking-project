@@ -1,0 +1,35 @@
+# One environment for running, testing and packaging the Marking App.
+#
+#   pixi run app     start the app from source
+#   pixi run test    run the unit tests
+#   pixi run build   test, package and smoke-test a release for this computer
+#
+# Poppler and Tesseract come from conda-forge so they are the same on every
+# machine and can be copied into the packaged app. Python packages match
+# requirements-desktop.txt.
+
+[workspace]
+name = "marking-app"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "win-64"]
+
+[dependencies]
+python = "3.12.*"
+poppler = ">=26.9,<27"
+tesseract = ">=5.5,<6"
+
+[pypi-dependencies]
+PySide6 = "==6.8.3"
+openpyxl = ">=3.1,<4"
+pypdf = ">=5,<7"
+pdf2image = ">=1.17,<2"
+pytesseract = ">=0.3.13,<1"
+Pillow = ">=11,<13"
+numpy = ">=2,<3"
+pyinstaller = ">=6.16,<7"
+
+[tasks]
+app = "python -B -X utf8 -m desktop"
+test = "python -B -X utf8 -m unittest discover -s tests && python -B -X utf8 -m unittest discover -s desktop/tests"
+build = "python -B -X utf8 packaging/build.py"

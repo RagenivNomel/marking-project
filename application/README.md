@@ -31,8 +31,11 @@ Paths above are relative to the project working directory. Application callers
 should normally supply absolute paths. Select only the roots belonging to the
 assignment; this API does not search the entire repository or infer ownership
 from student names. `job_roots` optionally adds saved grading jobs; `receipt_roots`
-adds rendering receipts. A split pile, roster and identity decisions can describe
-pre-marking work. These are references, not a new assignment database.
+adds rendering receipts. A continuous scan, roster and identity decisions can
+describe pre-marking work. When a continuous scan is supplied, the workflow
+creates and validates an app-owned split workspace before inspection; its
+manifest is internal metadata, not a teacher prerequisite. These are
+references, not a new assignment database.
 
 The delivered workbook above has a different path from the workbook recorded in
 the historical card receipts. Strict inspection reports that provenance mismatch;
@@ -66,18 +69,21 @@ to the existing Excel workflow before the next student starts. Approval, Excel
 handoff, and opening output folders remain teacher-controlled or outside the
 current execution boundary.
 
-The assignment's normalized pile path selects a stable app-owned batch name.
-For a new desktop task, the authoritative workbook is automatically created at
-`<essay-folder>/Results/results.xlsx`; reopening that essay folder rediscovers
-it. Jobs and checkpoints remain under the app's internal `jobs/<batch>/` tree.
-An existing workbook at the historical `output/<batch>/results.xlsx` remains in
-place and is reused when no new-layout workbook exists. If both workbook paths
-exist, inspection blocks the task rather than choosing between two editable
-files. Only a matching workbook result row and audit row count as completed;
-approved rows are preserved. Raw, parsed, validated, interrupted, and
-persistence-receipt artifacts remain diagnostic evidence and do not block
-ordinary marking. A new model attempt is isolated from any unfinished prior
-attempt.
+A task is identified by the content hash of its continuous scan
+(`task_<hash>`), never by its path; a split pile's `_continuous.pdf` gives the
+same identity. The authoritative workbook is created at
+`<scan folder>/Results/<scan name>-<8 hash characters>/results.xlsx` (for a
+split pile, under `<pile>/Results/`), so two scans in one folder, or new bytes
+at the same path, never share a workbook. Working files stay under the app's
+internal `jobs/<task>/` tree.
+
+An essay is done only when that workbook holds its valid result row and
+matching audit row. Anything short of that is not done: before it is marked
+again, its working folder `jobs/<task>/<essay>/` is discarded (except the
+`output/` card evidence) and the model call starts from scratch. Discards are
+appended to `jobs/<task>/discarded_attempts.log`, which recovery never reads.
+Saved rows, including `APPROVED` rows and teacher edits, are never regraded or
+overwritten; a damaged existing row is reported for the teacher to check.
 
 ## Stage 3C approved-row rendering
 

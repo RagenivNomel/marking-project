@@ -1,4 +1,5 @@
 import json
+import os
 from io import BytesIO
 from pathlib import Path
 import subprocess
@@ -9,7 +10,9 @@ from unittest import mock
 from pypdf import PdfWriter
 
 from grading.calibration_schema import response_json_schema
-from grading.codex_sol_grader import CodexInvocationError, CodexSolGrader, render_pdf_pages, resolve_codex_executable
+from grading.codex_sol_grader import (
+    CodexInvocationError, CodexSolGrader, _installed_codex_candidates, _minimal_environment, render_pdf_pages, resolve_codex_executable,
+)
 from grading.schemas import CRITERIA, RATINGS, Identity
 from grading.sol_grader import SolGrader, SolGradingInput
 from tests.local_temp import local_test_directory
@@ -94,6 +97,7 @@ class CodexSolGraderTests(unittest.TestCase):
             workspace_parent=self.root,
         )
 
+    @unittest.skipUnless(os.name == "nt", "Windows desktop Codex layout")
     def test_installed_desktop_cli_is_found_without_inherited_codex_path(self):
         executable = self.root / "OpenAI" / "Codex" / "bin" / "installed" / "codex.exe"
         executable.parent.mkdir(parents=True)
@@ -107,7 +111,26 @@ class CodexSolGraderTests(unittest.TestCase):
         executable = self.root / "codex.exe"
         executable.write_bytes(b"local test executable placeholder")
         with mock.patch("grading.codex_sol_grader.shutil.which", return_value=str(executable)):
-            self.assertEqual(resolve_codex_executable("codex"), str(executable.resolve()))
+            expected = executable.resolve() if os.name == "nt" else executable.absolute()
+            self.assertEqual(resolve_codex_executable("codex"), str(expected))
+
+    @unittest.skipIf(os.name == "nt", "macOS/Linux Codex locations")
+    def test_codex_outside_launcher_path_is_found_in_user_install(self):
+        executable = self.root / ".npm-global" / "bin" / "codex"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"#!/bin/sh\n")
+        executable.chmod(0o755)
+        with mock.patch("grading.codex_sol_grader.Path.home", return_value=self.root):
+            self.assertIn(executable, _installed_codex_candidates())
+
+    def test_codex_environment_keeps_home_and_leads_path_with_codex_folder(self):
+        executable = self.root / "bin" / ("codex.exe" if os.name == "nt" else "codex")
+        with mock.patch.dict("grading.codex_sol_grader.os.environ",
+                             {"HOME": "/Users/teacher", "PATH": "/usr/bin", "SECRET_TOKEN": "x"}, clear=True):
+            env = _minimal_environment(str(executable))
+        self.assertEqual(env["HOME"], "/Users/teacher")
+        self.assertNotIn("SECRET_TOKEN", env)
+        self.assertEqual(env["PATH"].split(os.pathsep), [str(executable.parent), "/usr/bin"])
 
     def test_successful_structured_output_uses_chatgpt_auth_and_fresh_ephemeral_exec(self):
         expected = valid_output(self.identity)

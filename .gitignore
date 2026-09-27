@@ -124,3 +124,22 @@ secrets*
 build/
 dist/
 *.egg-info/
+# Fake-marking test runs (launch-desktop-fake.cmd) and their scan copies
+/test-runs/
+/fake_test_*/
+
+# Generated per-scan state: split workspaces (header crops, roster guesses),
+# task results and rendered feedback cards, wherever a scan is opened
+**/.*.essay-work-*/
+**/Results/continuous-*/
+**/*-作文体检卡.png
+
+# Office lock files and test temp folders created at the repo root
+~$*
+/.roster-match-test-*/
+/.stage3a-test-*/
+
+# Packaging: pixi environment and PyInstaller output
+.pixi/
+/build/
+/dist/

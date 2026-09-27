@@ -110,15 +110,15 @@ Item {
                 content: RowLayout {
                     spacing: 14
                     Image {
-                        Layout.preferredWidth: 116; Layout.preferredHeight: 64
+                        Layout.preferredWidth: 320; Layout.preferredHeight: 80
                         visible: String(modelData.previewUrl || "").length > 0
                         source: String(modelData.previewUrl || "")
                         fillMode: Image.PreserveAspectFit
                         asynchronous: false
-                        Accessible.name: I18n.choose(modelData.label + " 姓名栏预览", modelData.label + " name-field preview")
+                        Accessible.name: I18n.choose(modelData.label + " 姓名、班级、班号预览", modelData.label + " name, class and seat-number preview")
                     }
                     ColumnLayout {
-                        Layout.preferredWidth: 210; Layout.fillWidth: false; spacing: 4
+                        Layout.preferredWidth: 140; Layout.fillWidth: false; spacing: 4
                         Text { textFormat: Text.PlainText; text: String(modelData.label); color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize; font.weight: Font.Bold }
                         Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: I18n.choose("文件显示：", "File label: ") + String(modelData.sourceHint || I18n.choose("未命名", "Unnamed")); color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.metaSize; wrapMode: Text.Wrap }
                         Text { textFormat: Text.PlainText; text: String(modelData.pages || 0) + I18n.choose("页", " pages"); color: Theme.secondaryInk; font.family: Theme.fontFamily; font.pixelSize: Theme.metaSize }

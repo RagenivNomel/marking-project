@@ -1,6 +1,6 @@
 {
   "rubric_version": "qualitative-eight-criteria-v2",
-  "basis": "Exactly eight qualitative criteria. Numeric scores are teacher/import-owned and are excluded from grader output.",
+  "basis": "Exactly eight qualitative criteria plus two AI-suggested whole-number section scores. The teacher verifies every score before approval; 总分 is an Excel formula (内容分 + 语文与结构分), not model output.",
   "criteria": [
     "审题扣题",
     "情节紧凑",
@@ -12,8 +12,22 @@
     "结尾照应／升华"
   ],
   "numeric_score": {
-    "available": false,
-    "owner": "teacher_or_import",
-    "fields": ["内容分", "语文与结构分", "总分"]
+    "available": true,
+    "owner": "ai_suggested_teacher_approved",
+    "fields": {
+      "content_score": {
+        "label": "内容分",
+        "max": 30
+      },
+      "language_structure_score": {
+        "label": "语文与结构分",
+        "max": 30
+      }
+    },
+    "total": {
+      "label": "总分",
+      "max": 60,
+      "computed_by": "excel_formula"
+    }
   }
 }

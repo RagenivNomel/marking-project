@@ -221,7 +221,7 @@ class ApplicationWorkflowTests(unittest.TestCase):
             (CodexSolGrader, "grade", "Stage 1 inspection must not use Codex grading"),
             (SolGrader, "grade", "Stage 1 inspection must not use API grading"),
             (Pipeline, "run_mock", "Stage 1 inspection must not run a mock pipeline"),
-            (Pipeline, "run_real_pdf", "Stage 1 inspection must not run real grading"),
+            (Pipeline, "_grade_essay", "Stage 1 inspection must not run real grading"),
             (Pipeline, "run_real_batch", "Stage 1 inspection must not run real batches"),
             (CalibrationPipeline, "prepare", "Stage 1 inspection must not prepare grading"),
             (CalibrationPipeline, "run", "Stage 1 inspection must not run calibration"),
@@ -334,6 +334,43 @@ class ApplicationWorkflowTests(unittest.TestCase):
         )
         return split, roster, decisions, source_pdf
 
+    def test_continuous_scan_prepares_an_app_owned_split_workspace(self):
+        continuous = self.root / "class-scan.pdf"
+        continuous.write_bytes(b"continuous scan fixture")
+        source = AssignmentSource(continuous_scan=continuous, roster=self.root / "roster.xlsx")
+
+        def fake_split(scan, workdir):
+            workdir.mkdir(parents=True)
+            shutil.copyfile(scan, workdir / "_continuous.pdf")
+
+        with patch("application.workflows.sec2_hcl_composition_v1.split_continuous_anonymous", side_effect=fake_split) as split, \
+             patch("application.workflows.sec2_hcl_composition_v1.read_existing_split", return_value=[]):
+            prepared = self.controller.prepare_source(source)
+            prepared_again = self.controller.prepare_source(prepared)
+
+        self.assertIsNotNone(prepared.split_pile)
+        self.assertTrue(str(prepared.split_pile).startswith(str(self.root)))
+        self.assertEqual(prepared_again, prepared)
+        split.assert_called_once()
+
+    def test_inspection_accepts_continuous_scan_without_teacher_manifest(self):
+        identity = self._identity()
+        prepared, roster, _, source_pdf = self._write_split_source(identity)
+        continuous = self.root / "incoming-class-scan.pdf"
+        continuous.write_bytes((prepared / "_continuous.pdf").read_bytes())
+        source = AssignmentSource(continuous_scan=continuous, roster=roster)
+
+        def fake_split(scan, workdir):
+            shutil.copytree(prepared, workdir)
+
+        with patch("application.workflows.sec2_hcl_composition_v1.split_continuous_anonymous", side_effect=fake_split):
+            inspection = self.controller.inspect(source)
+
+        self.assertEqual(inspection.summary["submissions"], 1)
+        workdir = CompositionWorkflow._scan_workdir(continuous)
+        self.assertEqual(inspection.submissions[0].submission_id, f"submission:{(workdir / source_pdf.name).resolve()}")
+        self.assertEqual({item.code for item in inspection.submissions[0].attention}, {"IDENTITY_UNRESOLVED"})
+
     def _write_checkpoint(
         self,
         identity,
@@ -421,16 +458,17 @@ class ApplicationWorkflowTests(unittest.TestCase):
             )
         return job_dir
 
-    def test_inspect_projects_pending_approved_duplicate_ids_and_saved_grading(self):
-        identity = self._identity()
+    def test_inspect_projects_pending_approved_and_saved_grading(self):
+        # One workbook row per student: the two submissions are different students.
         pending_store, pending_digest = self._add_workbook_row(
-            "audit-job-pending", identity, "PENDING"
+            "audit-job-pending", self._identity("016", "待审学生"), "PENDING"
         )
+        approved_identity = self._identity("017", "已审学生")
         approved_store, approved_digest = self._add_workbook_row(
-            "audit-job-approved", identity, "APPROVED"
+            "audit-job-approved", approved_identity, "APPROVED"
         )
         self._write_receipt(
-            "audit-job-approved", identity, approved_store, approved_digest
+            "audit-job-approved", approved_identity, approved_store, approved_digest
         )
 
         inspection = self._read_only_controller_call(
@@ -584,38 +622,22 @@ class ApplicationWorkflowTests(unittest.TestCase):
                     attention_text,
                 )
 
-    def test_validated_checkpoint_requires_present_validated_result(self):
-        cases = (
-            ("validated-good", "valid", True),
-            ("validated-missing", "missing", False),
-            ("validated-corrupt", "corrupt", False),
-        )
-        for index, (job_id, result_state, grading_available) in enumerate(cases, 50):
-            identity = self._identity(str(index), f"已验证学生{index}")
-            self._write_validated_job(job_id, identity, result_state)
+    def test_leftover_validated_files_are_not_results_without_a_workbook_row(self):
+        identity = self._identity("50", "已验证学生50")
+        split, roster, decisions, _ = self._write_split_source(identity)
+        self._write_validated_job("leftover-validated", identity, "valid")
 
         inspection = self._read_only_controller_call(
-            "inspect", self._source(job_roots=(self.jobs,))
+            "inspect", self._source(job_roots=(self.jobs,), split_pile=split,
+                                    roster=roster, identity_decisions=decisions)
         )
-        for job_id, result_state, grading_available in cases:
-            state = self._submission(inspection, job_id)
-            self.assertEqual(state.checkpoint_state, "VALIDATED")
-            self.assertEqual(state.grading_available, grading_available)
-            if result_state == "valid":
-                text = self._attention_text(inspection, state)
-                self.assertNotIn("grading_artifact_invalid", text)
-                self.assertNotIn("grading_artifact_missing", text)
-                self.assertNotIn(
-                    Action.RUN_MARKING,
-                    {item.action for item in inspection.available_actions},
-                )
-            else:
-                self.assertTrue(state.attention)
-                text = self._attention_text(inspection, state)
-                self.assertTrue(
-                    any(word in text for word in ("validated", "grading", "result", "missing", "invalid")),
-                    text,
-                )
+        self.assertEqual(len(inspection.submissions), 1)
+        state = inspection.submissions[0]
+        self.assertFalse(state.workbook_valid)
+        self.assertFalse(state.grading_available)
+        self.assertIn(Action.RUN_MARKING, state.next_actions)
+        self.assertEqual(state.attention, ())
+        self.assertEqual(inspection.summary["committed_results"], 0)
 
     def test_receipt_with_same_job_id_but_wrong_workbook_is_not_rendered(self):
         identity = self._identity("044", "来源错配学生")
@@ -764,7 +786,8 @@ class ApplicationWorkflowTests(unittest.TestCase):
                 roster=roster, identity_decisions=decisions,
             ),
         )
-        state = self._submission(inspection, "fixture-attempt")
+        self.assertEqual(len(inspection.submissions), 1)
+        state = inspection.submissions[0]
         self.assertIn(Action.RUN_MARKING, state.next_actions)
         self.assertEqual(inspection.summary["marking_available"], 1)
         self.assertEqual(inspection.summary["blocking_errors"], 0)
@@ -837,9 +860,10 @@ class ApplicationWorkflowTests(unittest.TestCase):
         }), encoding="utf-8")
 
         inspection = self._read_only_controller_call(
-            "inspect", self._source(job_roots=(self.jobs,))
+            "inspect", self._source(job_roots=(self.jobs,), split_pile=split,
+                                    roster=roster, identity_decisions=decisions)
         )
-        state = self._submission(inspection, "recoverable-parent")
+        self.assertEqual(len(inspection.submissions), 1)
         self.assertEqual(inspection.summary["marking_available"], 1)
         self.assertEqual(inspection.summary["submissions_needing_attention"], 0)
         self.assertEqual(inspection.summary["blocking_errors"], 0)
@@ -871,9 +895,10 @@ class ApplicationWorkflowTests(unittest.TestCase):
         }), encoding="utf-8")
 
         inspection = self._read_only_controller_call(
-            "inspect", self._source(job_roots=(self.jobs,))
+            "inspect", self._source(job_roots=(self.jobs,), split_pile=split,
+                                    roster=roster, identity_decisions=decisions)
         )
-        state = self._submission(inspection, "interrupted-parent")
+        self.assertEqual(len(inspection.submissions), 1)
         self.assertEqual(inspection.summary["marking_available"], 1)
         self.assertEqual(inspection.summary["submissions_needing_attention"], 0)
         self.assertEqual(inspection.summary["blocking_errors"], 0)
@@ -967,41 +992,6 @@ class ApplicationWorkflowTests(unittest.TestCase):
         actions = {item.action: item for item in inspection.available_actions}
         self.assertEqual(actions[Action.RENDER_APPROVED].submission_ids, ("ready-approved",))
 
-    def test_linked_calibration_child_projects_as_one_parent_submission(self):
-        identity = self._identity("052", "同源学生")
-        split, _, _, source_pdf = self._write_split_source(identity)
-        parent = self._write_checkpoint(
-            identity,
-            source_pdf,
-            job_id="production-parent",
-            state="VALIDATED",
-            attempts=0,
-            write_grading_result=True,
-        )
-        child = self._write_checkpoint(
-            identity,
-            source_pdf,
-            job_id="calibration-child",
-            state="VALIDATED",
-            attempts=0,
-            write_grading_result=True,
-        )
-        (parent / "real_grading_bridge.json").write_text(
-            json.dumps({"calibration_job": str(child.resolve())}, indent=2),
-            encoding="utf-8",
-        )
-
-        inspection = self._read_only_controller_call(
-            "inspect", self._source(job_roots=(self.jobs,), split_pile=split)
-        )
-        self.assertEqual(
-            [item.submission_id for item in inspection.submissions],
-            ["production-parent"],
-        )
-        evidence = self._submission(inspection, "production-parent").evidence
-        self.assertIn(str(parent / "student_record.json"), evidence)
-        self.assertIn(str(child / "student_record.json"), evidence)
-
     def test_current_confirmation_required_suppresses_run_after_confirmed_checkpoint(self):
         identity = self._identity("053", "需重新确认学生")
         split, roster, decisions, source_pdf = self._write_split_source(
@@ -1031,7 +1021,8 @@ class ApplicationWorkflowTests(unittest.TestCase):
                 identity_decisions=decisions,
             ),
         )
-        state = self._submission(inspection, "confirmed-before")
+        self.assertEqual(len(inspection.submissions), 1)
+        state = inspection.submissions[0]
         self.assertFalse(state.identity_confirmed)
         self.assertNotIn(
             Action.RUN_MARKING,
