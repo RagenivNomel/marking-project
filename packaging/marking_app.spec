@@ -9,6 +9,8 @@ from PyInstaller.utils.hooks import collect_submodules
 ROOT = Path(SPECPATH).parent
 APP_NAME = "Marking App"
 VERSION = os.environ.get("MARKING_APP_VERSION", "0.0.0")
+# PyInstaller converts this PNG to .icns/.ico (made by packaging/make_icon.py).
+ICON = str(ROOT / "desktop" / "assets" / "app-icon.png")
 
 # Read-only resources, placed at the same relative paths as in the repository.
 # Only files tracked in git belong here: config/ also collects local identity
@@ -81,6 +83,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name=APP_NAME,
+    icon=ICON,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -94,6 +97,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name=f"{APP_NAME}.app",
+        icon=ICON,
         bundle_identifier="local.marking-app",
         version=VERSION,
         info_plist={

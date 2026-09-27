@@ -27,7 +27,7 @@ def polish_native_window(window):
 def create_app(argv=None, dev_ui=False, controller=None, identity_matcher=None, identity_decisions_dir=None,
                controller_factory=None):
     from PySide6.QtCore import QUrl
-    from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication
+    from PySide6.QtGui import QFont, QFontDatabase, QGuiApplication, QIcon
     from PySide6.QtQml import QQmlApplicationEngine
     from PySide6.QtQuickControls2 import QQuickStyle
     from desktop.bridge import DesktopBridge
@@ -37,6 +37,7 @@ def create_app(argv=None, dev_ui=False, controller=None, identity_matcher=None, 
     app = existing_app or QGuiApplication(argv or sys.argv)
     app.setApplicationName('作文工作台')
     app.setOrganizationName('TeacherWorkspace')
+    app.setWindowIcon(QIcon(str(Path(__file__).parent / 'assets' / 'app-icon.png')))
     families = QFontDatabase.families()
     font_name = next((f for f in ('Microsoft YaHei', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei UI', 'Noto Sans CJK SC') if f in families), app.font().family())
     font = QFont(font_name)
