@@ -1,4 +1,5 @@
 """Batch-friendly Excel repository; approved wording is read back verbatim."""
+from copy import copy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,25 +43,81 @@ def roster_text(value):
     return str(value).strip() if value is not None else ""
 
 
-def read_roster(path, sheet_name="作文诊断输入"):
+ROSTER_NAME_HEADERS = ("姓名", "学生姓名")
+
+
+def _roster_columns(headers):
+    """Map 班级/班号/姓名 to column indices, or None if this is not a roster sheet."""
+    headers = [roster_text(value) for value in headers]
+    names = [header for header in ROSTER_NAME_HEADERS if header in headers]
+    if "班号" not in headers or not names:
+        return None
+    if len(names) > 1:
+        raise ValidationError("名册的第一行同时有“姓名”和“学生姓名”，请只保留一个。")
+    for header in ("班级", "班号", names[0]):
+        if headers.count(header) > 1:
+            raise ValidationError(f"名册的第一行有两个“{header}”列，请只保留一个。")
+    return {
+        "class_name": headers.index("班级") if "班级" in headers else None,
+        "student_id": headers.index("班号"),
+        "student_name": headers.index(names[0]),
+    }
+
+
+def read_roster(path, sheet_name=None, class_name=None):
+    """Read 班级, 班号 and 姓名 (or 学生姓名) from any Excel workbook.
+
+    Every sheet whose first row has these headings is read and every other
+    column or sheet is ignored, so one sheet per class also works. A student
+    listed twice with the same name counts once; the same 班级 + 班号 with a
+    different name is refused. A sheet without a 班级 column takes the class
+    the teacher gives once as class_name. sheet_name restricts the search.
+    """
+    class_name = roster_text(class_name) or None
     book = load_workbook(path, read_only=True, data_only=True)
     try:
-        sheet = book[sheet_name]
-        rows = sheet.iter_rows(values_only=True)
-        headers = next(rows)
-        name_col = "学生姓名" if "学生姓名" in headers else "姓名"
-        indices = [headers.index(key) for key in ("班号", name_col, "班级")]
-        result, seen = [], set()
-        for row in rows:
-            values = [roster_text(row[i]) if i < len(row) else "" for i in indices]
-            if not any(values):
-                continue
-            identity = Identity.from_dict(dict(zip(("student_id", "student_name", "class_name"), values)))
-            key = (identity.class_name, identity.student_id)
-            if key in seen:
-                raise ValidationError(f"Duplicate roster identity: {key}")
-            seen.add(key)
-            result.append(identity)
+        if sheet_name is not None and sheet_name not in book.sheetnames:
+            raise ValidationError(f"名册里没有名为“{sheet_name}”的工作表。")
+        found = []
+        for sheet in ([book[sheet_name]] if sheet_name is not None else book.worksheets):
+            header = next(sheet.iter_rows(max_row=1, values_only=True), ())
+            columns = _roster_columns(header)
+            if columns is not None:
+                found.append((sheet, columns))
+        if not found:
+            raise ValidationError("名册里找不到学生名单。第一行需要有“班号”和“姓名”两列（“班级”列可选）。")
+        without_class = [sheet.title for sheet, columns in found if columns["class_name"] is None]
+        if without_class and class_name is None:
+            raise ValidationError(f"名册的工作表“{'、'.join(without_class)}”没有“班级”列，请填写班级。")
+        if not without_class and class_name is not None:
+            raise ValidationError("名册已有“班级”列，请不要另外填写班级。")
+        result, seen = [], {}
+        for sheet, columns in found:
+            for number, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), 2):
+                values = {key: roster_text(row[index]) if index is not None and index < len(row) else ""
+                          for key, index in columns.items()}
+                if not any(values.values()):
+                    continue
+                if columns["class_name"] is None:
+                    values["class_name"] = class_name
+                place = f"工作表“{sheet.title}”第 {number} 行"
+                missing = [label for key, label in (("class_name", "班级"), ("student_id", "班号"), ("student_name", "姓名"))
+                           if not values[key]]
+                if missing:
+                    raise ValidationError(f"名册{place}缺少{'、'.join(missing)}。")
+                identity = Identity.from_dict(values)
+                key = (identity.class_name, identity.student_id)
+                if key in seen:
+                    earlier, earlier_place = seen[key]
+                    if earlier.student_name != identity.student_name:
+                        raise ValidationError(
+                            f"名册里 {key[0]} 班 {key[1]} 号有两个不同的名字：{earlier_place}是“{earlier.student_name}”，"
+                            f"{place}是“{identity.student_name}”。")
+                    continue
+                seen[key] = (identity, place)
+                result.append(identity)
+        if not result:
+            raise ValidationError("名册里没有学生。")
         return result
     finally:
         book.close()
@@ -175,16 +232,27 @@ class ExcelStore:
             Path(temporary).unlink(missing_ok=True)
 
     @staticmethod
-    def _row(book, job_id):
+    def _student_row(book, class_name, student_id):
+        # Students are found by 班级 + 班号, never by position, so the teacher
+        # sheet may be sorted or filtered freely. The Excel行 audit column is
+        # kept only as a readable hint.
+        matches = [row for row in book[SHEET].iter_rows(min_row=2)
+                   if (roster_text(row[0].value), roster_text(row[1].value)) == (class_name, student_id)]
+        if len(matches) > 1:
+            raise ValidationError("Duplicate student rows in Excel results sheet")
+        if not matches:
+            raise ValidationError("Excel audit student has no result row")
+        return matches[0]
+
+    @classmethod
+    def _row(cls, book, job_id):
         matches = [row for row in book[AUDIT_SHEET].iter_rows(min_row=2) if row[0].value == job_id]
         if len(matches) > 1:
             raise ValidationError("Duplicate job rows in Excel audit sheet")
         if not matches:
             return None, None
-        row_number = matches[0][3].value
-        if type(row_number) is not int or row_number < 2:
-            raise ValidationError("Invalid Excel row reference in audit sheet")
-        return book[SHEET][row_number], matches[0]
+        audit = matches[0]
+        return cls._student_row(book, roster_text(audit[1].value), roster_text(audit[2].value)), audit
 
     @staticmethod
     def _score(value, label):
@@ -323,10 +391,9 @@ class ExcelStore:
             if len(candidates) != 1:
                 raise ValidationError("Approved Excel render source is not uniquely identified")
             audit_row = candidates[0]
-            row_number = audit_row[3].value
-            if type(row_number) is not int or row_number < 2:
-                raise ValidationError("Invalid Excel row reference in audit sheet")
-            record = self._decode(book[SHEET][row_number], identity)
+            row = self._student_row(book, roster_text(audit_row[1].value), roster_text(audit_row[2].value))
+            row_number = row[0].row
+            record = self._decode(row, identity)
             if record.review_status != "APPROVED":
                 raise ValidationError("Student result is not APPROVED in Excel")
             digest = audit_row[4].value
@@ -374,3 +441,65 @@ class ExcelStore:
             self._save(book)
         finally:
             book.close()
+
+    def sort_rows(self):
+        """Order the teacher sheet by 班级 then 班号, lowest first (1, 2, 3 …).
+
+        Values, cell types, styles, comments and row heights move with each
+        student; a 总分 =E+F sum is rewritten for its new row. Excel行 hints
+        in the audit sheet are refreshed. Nothing is saved if already in order.
+        """
+        with self._write_lock:
+            if not self.path.exists():
+                return
+            book = self._open()
+            try:
+                if self._sort_rows_unlocked(book):
+                    self._save(book)
+            finally:
+                book.close()
+
+    @staticmethod
+    def _sort_rows_unlocked(book):
+        sheet = book[SHEET]
+        width = len(HEADERS)
+        rows = []
+        for row in sheet.iter_rows(min_row=2, max_col=width):
+            if not any(cell.value is not None for cell in row):
+                continue
+            rows.append({
+                "row": row[0].row,
+                "key": tuple(roster_text(row[i].value) for i in (0, 1)),
+                "height": sheet.row_dimensions[row[0].row].height,
+                "cells": [(cell.value, cell.data_type, copy(cell._style), copy(cell.comment)) for cell in row],
+            })
+        ordered = sorted(rows, key=lambda item: tuple(_sort_key(value) for value in item["key"]))
+        targets = [item["row"] for item in rows]
+        if [item["row"] for item in ordered] == targets:
+            return False
+        targets.sort()
+        new_rows = {}
+        for target, item in zip(targets, ordered):
+            new_rows[item["key"]] = target
+            sheet.row_dimensions[target].height = item["height"]
+            for col, (value, data_type, style, comment) in enumerate(item["cells"], 1):
+                cell = sheet.cell(target, col)
+                if (col == TOTAL_COLUMN and data_type == "f"
+                        and str(value).replace(" ", "").upper() == _total_formula(item["row"])):
+                    value = _total_formula(target)
+                cell.value = value
+                if value is not None:
+                    cell.data_type = data_type
+                cell._style = style
+                cell.comment = comment
+        for audit in book[AUDIT_SHEET].iter_rows(min_row=2):
+            key = (roster_text(audit[1].value), roster_text(audit[2].value))
+            if key in new_rows:
+                audit[3].value = new_rows[key]
+        return True
+
+
+def _sort_key(text):
+    # Numbers compare as numbers, so 班号 9 comes before 10; any non-numeric
+    # value comes after every number.
+    return (0, int(text), "") if text.isdigit() else (1, 0, text)

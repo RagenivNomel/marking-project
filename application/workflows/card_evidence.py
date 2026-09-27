@@ -21,7 +21,6 @@ def inspect_card(
     receipt_path: Path,
     workbook: Path,
     job_id: str,
-    excel_row: int,
     input_digest: str,
     approved_values: dict,
     expected_teacher_output: Path | None = None,
@@ -40,10 +39,10 @@ def inspect_card(
         if not isinstance(source, dict) or source.get("source_of_truth") != "approved_excel_row":
             raise ValueError("receipt source_of_truth is not approved_excel_row")
 
-        if (source.get("job_id") != job_id
-                or source.get("excel_row") != excel_row
-                or source.get("input_digest") != input_digest):
-            return False, "RECEIPT_SOURCE_MISMATCH", "Receipt source job, Excel row, or input digest differs"
+        # The receipt's excel_row is informational only: the teacher sheet may
+        # be re-sorted, and job, digest and approved values pin the student.
+        if source.get("job_id") != job_id or source.get("input_digest") != input_digest:
+            return False, "RECEIPT_SOURCE_MISMATCH", "Receipt source job or input digest differs"
         expected_workbook = Path(workbook).resolve()
         actual_workbook = _resolved(source.get("workbook"), receipt_path.parent)
         if actual_workbook != expected_workbook:

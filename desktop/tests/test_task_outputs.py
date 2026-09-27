@@ -147,12 +147,12 @@ class TaskOutputTests(unittest.TestCase):
             Path(receipt_data["teacher_output"]["artifact"]).resolve(), cards[0].resolve(),
         )
         okay, code, detail = inspect_card(
-            updated_receipt, workbook, "student_26", 26, "digest-26",
+            updated_receipt, workbook, "student_26", "digest-26",
             updated.to_dict(), expected_teacher_output=cards[0],
         )
         self.assertTrue(okay, (code, detail))
         stale, stale_code, _ = inspect_card(
-            updated_receipt, workbook, "student_26", 26, "digest-26",
+            updated_receipt, workbook, "student_26", "digest-26",
             records[0].to_dict(), expected_teacher_output=cards[0],
         )
         self.assertFalse(stale)

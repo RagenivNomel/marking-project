@@ -359,7 +359,7 @@ class RealBatchParallelTests(unittest.TestCase):
         self.assertEqual(self.identity_names_in_calls(offline).count(self.identities[1].student_name), 2)
         self.assertEqual(self.identity_names_in_calls(offline).count(self.identities[2].student_name), 1)
         self.assertEqual(self.identity_names_in_calls(offline).count(self.identities[3].student_name), 1)
-        self.assertEqual([row[1] for row in self.read_rows()], ["01", "04", "02"])
+        self.assertEqual([row[1] for row in self.read_rows()], ["01", "02", "04"])
 
     def test_persistence_failure_keeps_workbook_readable_and_continue_regrades_uncommitted_result(self):
         offline = OfflineCodexRunner(self.identities[:2])

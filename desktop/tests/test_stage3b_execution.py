@@ -249,6 +249,32 @@ class Stage3BApplicationExecutionTests(unittest.TestCase):
         finally:
             editable.close()
 
+    def test_skipped_second_essay_is_saved_aside_and_the_rest_is_marked(self):
+        from desktop.identity_confirmation import SKIPPED_FOLDER, build_identity_review, save_identity_confirmations
+        # Essay 2 is Alice's second essay: confirm essay 1 and skip essay 2.
+        decisions = json.loads(self.decisions.read_text(encoding="utf-8"))[:1]
+        self.decisions.write_text(json.dumps(decisions, ensure_ascii=False), encoding="utf-8")
+        source, saved = save_identity_confirmations(self.source, [{"sourcePdf": "essay_002.pdf", "skip": True}])
+        self.assertEqual(saved, 2)
+        copy = self.root / SKIPPED_FOLDER / "pile-作文002.pdf"
+        self.assertEqual(copy.read_bytes(), (self.pile / "essay_002.pdf").read_bytes())
+
+        inspection = self.controller.inspect(source)
+        self.assertEqual((inspection.summary["submissions"], inspection.summary["skipped"]), (1, 1))
+        self.assertEqual(inspection.skipped, (str(copy),))
+        self.assertFalse(build_identity_review(source, inspection)["visible"])
+        flow = derive_teacher_flow(inspection)
+        self.assertEqual((flow["step"], flow["primaryAction"]), ("ready_to_mark", "RUN_MARKING"))
+        self.assertIn("另有1份已跳过", project(inspection, source)["subtitle"])
+        self.assertEqual(project(inspection, source)["skippedEssays"],
+                         [{"path": str(copy), "label": "批改跳过的作文 002"}])
+
+        result = self.controller.execute(Action.RUN_MARKING, source)
+        self.assertEqual([item["identity"]["student_id"] for item in result["result"]["validated"]], ["01"])
+        self.assertEqual(len(self.transport.calls), 1)
+        after = self.controller.inspect(source)
+        self.assertEqual((after.summary["committed_results"], after.summary["skipped"]), (1, 1))
+
     def test_unconfirmed_assignments_cannot_start_marking(self):
         source = AssignmentSource(
             split_pile=self.pile,

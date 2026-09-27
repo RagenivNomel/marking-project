@@ -536,6 +536,17 @@ class Pipeline:
                     submit_available(executor)
                     report(len(pending) + len(buffered), current_work(), interrupted=stopped_early)
 
+        sort_warning = None
+        if validated:
+            # Rows are appended in scan order (and resumed essays go last);
+            # one pass leaves them in 班号 order. Students are found by
+            # 班级 + 班号, so moving rows is safe.
+            try:
+                self.excel.sort_rows()
+            except Exception as exc:
+                sort_warning = f"{type(exc).__name__}: {exc}"
+                _marking_trace(f"sorting workbook failed {sort_warning}")
+
         batch_finished_at = datetime.now(timezone.utc)
         elapsed_seconds = max(0.0, time.perf_counter() - batch_started)
         with timing_guard:
@@ -569,6 +580,8 @@ class Pipeline:
         }
         if timing_warning is not None:
             outcome["timing_evidence_warning"] = timing_warning
+        if sort_warning is not None:
+            outcome["sort_warning"] = sort_warning
         report(0, "", interrupted=stopped_early)
         return outcome
 
@@ -601,8 +614,6 @@ class Pipeline:
                         or row[0].row != rows[0][0].row):
                     return "damaged"
                 if (roster_text(audit[1].value), roster_text(audit[2].value)) != student:
-                    return "damaged"
-                if audit[3].value != row[0].row:
                     return "damaged"
                 digest = audit[4].value
                 if not isinstance(digest, str) or not digest.strip():

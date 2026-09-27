@@ -195,6 +195,28 @@ Item {
             }
         }
 
+        NeoCard {
+            // Offered only once the class itself is finished, cards included.
+            Layout.fillWidth: true
+            visible: teacherFlow.flow.step === "complete" && (teacherFlow.appState.skippedEssays || []).length > 0
+            fill: Theme.card
+            content: ColumnLayout {
+                spacing: 10
+                Text { textFormat: Text.PlainText; text: I18n.choose("跳过的作文", "Skipped Essays"); color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.cardTitleSize; font.weight: Font.DemiBold }
+                Text { textFormat: Text.PlainText; Layout.fillWidth: true; text: I18n.choose("这些作文已另存为单独 PDF。点击即可把它作为新任务打开并批改，使用同一份名册。", "Each was saved as its own PDF. Click to open it as a new task and mark it with the same roster."); color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize; wrapMode: Text.Wrap }
+                Repeater {
+                    model: teacherFlow.appState.skippedEssays || []
+                    delegate: NeoButton {
+                        required property var modelData
+                        text: String(modelData.label)
+                        enabled: !bridge.busy
+                        reducedMotion: teacherFlow.reducedMotion
+                        onClicked: bridge.openSkippedEssay(String(modelData.path))
+                    }
+                }
+            }
+        }
+
         ColumnLayout {
             Layout.fillWidth: true
             visible: (teacherFlow.appState.rows || []).length > 0

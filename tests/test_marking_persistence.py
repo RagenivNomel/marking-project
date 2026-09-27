@@ -172,7 +172,7 @@ class MarkingPersistenceTests(unittest.TestCase):
         self.assertEqual([item["identity"]["student_id"] for item in second["validated"]], ["02"])
         self.assertEqual(transport.calls.count("02"), 2)
         self.assertEqual(transport.calls.count("01"), 1)
-        self.assertEqual([row[1] for row in self.rows()], ["01", "03", "02"])
+        self.assertEqual([row[1] for row in self.rows()], ["01", "02", "03"])
 
     def test_unreadable_essay_is_not_done_and_is_marked_again_next_run(self):
         transport = ScriptedTransport(self.identities, unreadable_once={self.identities[0].student_name})

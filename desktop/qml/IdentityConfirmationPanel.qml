@@ -28,6 +28,14 @@ Item {
         selections = next
         selectionVersion++
     }
+    // Dropdown choices: "skip this essay" first, so it is easy to find, then
+    // every roster student.
+    function skipKey() { return String((review.skipOption || {}).key || "") }
+    function choices() {
+        var list = (review.roster || []).slice()
+        if (review.skipOption) list.unshift(review.skipOption)
+        return list
+    }
     function rosterItem(key) {
         var roster = review.roster || []
         for (var i = 0; i < roster.length; i++) if (String(roster[i].key) === String(key)) return roster[i]
@@ -48,7 +56,7 @@ Item {
         var rows = review.rows || []
         for (var j = 0; j < rows.length; j++) {
             var key = String(selections[String(rows[j].sourcePdf)] || "")
-            if (!key.length) continue
+            if (!key.length || key === panel.skipKey()) continue
             if (seen[key]) return true
             seen[key] = true
         }
@@ -60,6 +68,10 @@ Item {
         var rows = review.rows || []
         for (var i = 0; i < rows.length; i++) {
             var key = String(selections[String(rows[i].sourcePdf)] || "")
+            if (key === panel.skipKey()) {
+                result.push({sourcePdf: String(rows[i].sourcePdf), skip: true})
+                continue
+            }
             var student = rosterItem(key)
             if (student) result.push({sourcePdf: String(rows[i].sourcePdf), className: String(student.className), studentId: String(student.studentId)})
         }
@@ -84,6 +96,13 @@ Item {
                     textFormat: Text.PlainText; Layout.fillWidth: true
                     text: I18n.choose("系统找到" + String(panel.review.totalCount || 0) + "份作文。请确认每份作文对应的学生。", "The system found " + String(panel.review.totalCount || 0) + " submissions. Confirm the student for each one.")
                     color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize; wrapMode: Text.Wrap
+                }
+                Text {
+                    // Why the roster could not be used, e.g. a missing 班级 column.
+                    visible: (panel.review.roster || []).length === 0 && String(panel.review.message || "").length > 0
+                    textFormat: Text.PlainText; Layout.fillWidth: true
+                    text: String(panel.review.message || "")
+                    color: Theme.ink; font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize; font.weight: Font.DemiBold; wrapMode: Text.Wrap
                 }
                 Text {
                     textFormat: Text.PlainText
@@ -129,7 +148,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.minimumWidth: 280
                         implicitHeight: Theme.controlHeight
-                        model: panel.review.roster || []
+                        model: panel.choices()
                         textRole: "label"
                         valueRole: "key"
                         font.family: Theme.fontFamily; font.pixelSize: Theme.bodySize

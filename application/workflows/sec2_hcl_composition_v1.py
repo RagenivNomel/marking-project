@@ -208,7 +208,8 @@ class CompositionWorkflow:
             lock = _path(root) / ".pipeline.lock"
             if lock_is_active(lock):
                 issues.append(Attention("BATCH_LOCKED", "error", "任务可能仍在运行，请先检查，不要直接重试。", str(lock)))
-        self._intake(source, entries, issues)
+        skipped = []
+        self._intake(source, entries, issues, skipped)
         self._cards(source, workbook, entries, issues)
         if before is not None:
             try:
@@ -221,7 +222,7 @@ class CompositionWorkflow:
                     entry.record = None
                     entry.rendered = False
         # Suppress actions when assignment-wide evidence is incomplete or ambiguous.
-        return self._finish(entries, issues, workbook is not None and workbook.is_file())
+        return self._finish(entries, issues, workbook is not None and workbook.is_file(), skipped)
 
     @staticmethod
     def _workbook(path, validator, entries, issues):
@@ -236,20 +237,25 @@ class CompositionWorkflow:
             audits = [row for row in book[AUDIT_SHEET].iter_rows(min_row=2)
                       if any(c.value is not None for c in row)]
             job_counts = Counter(str(row[0].value) for row in audits)
-            row_counts = Counter(str(row[3].value) for row in audits)
-            by_row = defaultdict(list)
+            # Result rows and audit entries pair up by 班级 + 班号, not by row
+            # position, so a sorted or filtered teacher sheet stays valid.
+            def student(cells):
+                return roster_text(cells[0].value), roster_text(cells[1].value)
+            student_counts = Counter(student(row) for row in rows.values())
+            by_student = defaultdict(list)
             for audit in audits:
-                number = audit[3].value
-                if type(number) is not int or number not in rows:
-                    issues.append(Attention("AUDIT_ROW_INVALID", "error", "工作簿的审核记录与作文行不一致。", f"Audit row {audit[0].row}: invalid result row {number!r}"))
+                key = (roster_text(audit[1].value), roster_text(audit[2].value))
+                if key not in student_counts:
+                    issues.append(Attention("AUDIT_ROW_INVALID", "error", "工作簿的审核记录与作文行不一致。", f"Audit row {audit[0].row}: no result row for student {key!r}"))
                 else:
-                    by_row[number].append(audit)
+                    by_student[key].append(audit)
             store = ExcelStore(path, validator)
             for number, row in rows.items():
-                candidates = by_row[number]
+                candidates = by_student[student(row)]
                 audit = candidates[0] if len(candidates) == 1 else None
                 job = audit[0].value if audit else None
-                valid_job = isinstance(job, str) and bool(job.strip()) and job_counts[job] == 1
+                valid_job = (isinstance(job, str) and bool(job.strip()) and job_counts[job] == 1
+                             and student_counts[student(row)] == 1)
                 key = job if valid_job else f"excel-row:{number}"
                 entry = entries[key] = _Entry(key, evidence=[str(path) + f"#row={number}"])
                 try:
@@ -257,12 +263,10 @@ class CompositionWorkflow:
                         ("class_name", "student_id", "student_name"),
                         (roster_text(c.value) for c in row[:3]),
                     )))
-                    if audit is None or not valid_job or row_counts[str(number)] != 1:
-                        raise ValueError("Missing or duplicate audit job/row mapping")
+                    if audit is None or not valid_job:
+                        raise ValueError("Missing or duplicate audit job/student mapping")
                     if any(c.data_type == "f" for c in audit):
                         raise ValueError("Audit requires literal values, not formulas")
-                    if (roster_text(audit[1].value), roster_text(audit[2].value)) != (entry.identity.class_name, entry.identity.student_id):
-                        raise ValueError("Audit class/student does not match result row")
                     if not isinstance(audit[4].value, str) or not audit[4].value.strip():
                         raise ValueError("Audit input digest is missing")
                     record = store.get(job, entry.identity)
@@ -293,7 +297,7 @@ class CompositionWorkflow:
         return sorted(paths)
 
     @staticmethod
-    def _intake(source, entries, issues):
+    def _intake(source, entries, issues, skipped):
         if source.split_pile is None:
             if source.roster is not None or source.identity_decisions is not None:
                 issues.append(Attention("INTAKE_SOURCE_MISSING", "error", "请同时指定作文资料文件夹。"))
@@ -309,7 +313,7 @@ class CompositionWorkflow:
             try:
                 records = apply_identity_decisions(
                     submissions,
-                    read_roster(source.roster, source.roster_sheet),
+                    read_roster(source.roster, source.roster_sheet, source.roster_class),
                     read_json(source.identity_decisions),
                     require_complete=False,
                 )
@@ -319,6 +323,10 @@ class CompositionWorkflow:
         for submission in submissions:
             pdf = (pile / submission.source_pdf).resolve()
             record = decisions.get(submission.source_pdf)
+            if record and record["match_status"] == "SKIPPED":
+                # Set aside by the teacher: not part of this task's marking.
+                skipped.append(record["saved_copy"] or str(pdf))
+                continue
             identity = (Identity.from_dict({k: record[k] for k in ("class_name", "student_id", "student_name")})
                         if record else None)
             confirmed = bool(record and record["match_status"] == "STRONG_ROSTER_MATCH")
@@ -378,7 +386,7 @@ class CompositionWorkflow:
                 if paths is not None and workbook == paths.workbook.resolve():
                     expected_teacher_output = paths.feedback_cards_directory / feedback_card_filename(entry.record)
                 okay, code, detail = inspect_card(
-                    path, workbook, entry.key, entry.audit["excel_row"],
+                    path, workbook, entry.key,
                     entry.audit["input_digest"], entry.record.to_dict(),
                     expected_teacher_output=expected_teacher_output,
                 )
@@ -405,7 +413,7 @@ class CompositionWorkflow:
                 entry.rendered = False
 
     @staticmethod
-    def _finish(entries, issues, has_workbook):
+    def _finish(entries, issues, has_workbook, skipped=()):
         issues = list(dict.fromkeys(issues))
         global_error = any(a.severity == "error" for a in issues)
         submissions = []
@@ -446,12 +454,12 @@ class CompositionWorkflow:
             targets.setdefault(Action.RESOLVE_ATTENTION, [])
         if not entries and not issues and not has_workbook:
             targets[Action.PREPARE_SUBMISSIONS] = []
-        return Inspection(WORKFLOW_ID, DISPLAY_NAME, STAGES, tuple(submissions), tuple(issues), tuple(
+        return Inspection(WORKFLOW_ID, DISPLAY_NAME, STAGES, tuple(submissions), tuple(issues), available_actions=tuple(
             AvailableAction(action, tuple(targets[action]), action in (
                 Action.REFRESH_REVIEW_STATUS, Action.RUN_MARKING, Action.RENDER_APPROVED
             ))
             for action in Action if action in targets
-        ))
+        ), skipped=tuple(skipped))
 
     def _feedback_source(self, source):
         """Bind rendering to this app's matching output/jobs batch only."""
@@ -697,10 +705,11 @@ class CompositionWorkflow:
         submissions = read_existing_split(source.split_pile)
         records = apply_identity_decisions(
             submissions,
-            read_roster(source.roster, source.roster_sheet),
+            read_roster(source.roster, source.roster_sheet, source.roster_class),
             read_json(source.identity_decisions),
             require_complete=True,
         )
+        records = [record for record in records if record["match_status"] != "SKIPPED"]
         by_student = defaultdict(list)
         for item in inspection.submissions:
             if item.class_name and item.student_id:

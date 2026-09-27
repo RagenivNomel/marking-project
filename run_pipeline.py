@@ -46,7 +46,7 @@ def main(argv=None):
         elif args.command == "intake":
             records = apply_identity_decisions(
                 read_existing_split(args.pile),
-                read_roster(args.workbook),
+                read_roster(args.workbook, "作文诊断输入"),
                 read_json(args.decisions),
             )
             strong_identities = [Identity.from_dict({
@@ -67,7 +67,7 @@ def main(argv=None):
         elif args.command == "real-batch":
             records = apply_identity_decisions(
                 read_existing_split(args.pile),
-                read_roster(args.workbook),
+                read_roster(args.workbook, "作文诊断输入"),
                 read_json(args.decisions),
             )
             confirmed = [item for item in records if item["match_status"] == "STRONG_ROSTER_MATCH"]
