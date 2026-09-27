@@ -18,16 +18,44 @@ PDF/roster intake → identity resolution → marking → results workbook → t
 
 ## Development setup
 
-Install the desktop, scanning and core Python dependencies, then launch the desktop application:
+[Pixi](https://pixi.sh) installs everything, including Python, Poppler and
+Tesseract, from the versions locked in `pixi.lock`. No admin rights or
+Homebrew are needed.
 
-```powershell
-python -m pip install -r requirements-desktop.txt
-python -B -m desktop
+```
+pixi run app     # start the app from source
+pixi run test    # run the unit tests
 ```
 
-Continuous-scan preparation also requires locally installed Tesseract and
-Poppler executables. Real grading requires a
-configured external grading provider and its locally managed credentials.
+Without pixi, install `requirements-desktop.txt` with pip and provide Tesseract
+and Poppler yourself. Real marking uses the Codex CLI signed in with ChatGPT on
+the same computer (`codex login`).
+
+## Building a release
+
+Releases are built on the computer they are for: the macOS `.dmg` on a Mac,
+the Windows `.zip` on Windows. From a fresh clone:
+
+1. Install pixi.
+   - macOS: `curl -fsSL https://pixi.sh/install.sh | sh`, then open a new Terminal.
+   - Windows: `winget install prefix-dev.pixi`, then open a new terminal.
+2. `pixi run build`
+
+The build runs the tests, packages the app with PyInstaller, bundles Poppler
+and Tesseract, and self-checks the packaged app with a bare PATH, as a Finder
+or desktop-shortcut launch would have. The release file lands in `dist/`.
+Raise `version` in `pixi.toml` before building a new release.
+
+Installing a release:
+
+- macOS: open the `.dmg` and drag Marking App to Applications. The app is not
+  notarised, so the first launch is blocked once: open System Settings →
+  Privacy & Security and choose Open Anyway.
+- Windows: unzip anywhere and run `Marking App.exe`.
+
+The installed app keeps its work in `~/Library/Application Support/Marking App`
+(macOS) or `%LOCALAPPDATA%\Marking App` (Windows), so replacing the app with a
+newer version keeps it.
 
 ## Tests
 

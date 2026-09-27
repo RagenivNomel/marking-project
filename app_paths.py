@@ -58,6 +58,10 @@ def add_native_tools_to_path() -> None:
     Windows Tesseract installer.
     """
     current = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
-    bundled = [str(BUNDLED_BIN)] if BUNDLED_BIN.is_dir() and str(BUNDLED_BIN) not in current else []
+    bundled = [BUNDLED_BIN]
+    if is_frozen() and os.name == "nt":
+        # PyInstaller puts the tools' DLLs beside the app's own, one level up.
+        bundled.append(ROOT)
+    bundled = [str(path) for path in bundled if path.is_dir() and str(path) not in current]
     known = [str(path) for path in _well_known_tool_dirs() if path.is_dir() and str(path) not in current]
     os.environ["PATH"] = os.pathsep.join(bundled + current + known)

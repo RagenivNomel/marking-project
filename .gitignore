@@ -138,3 +138,8 @@ dist/
 ~$*
 /.roster-match-test-*/
 /.stage3a-test-*/
+
+# Packaging: pixi environment and PyInstaller output
+.pixi/
+/build/
+/dist/

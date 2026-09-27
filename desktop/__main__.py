@@ -77,7 +77,12 @@ def main():
     parser.add_argument('--reduced-motion', action='store_true')
     parser.add_argument('--fake-marking', action='store_true',
                         help='test the teacher flow with instant fake marking (no marking model calls)')
+    parser.add_argument('--self-check', type=Path, metavar='REPORT',
+                        help='check the bundled tools and resources, write a JSON report and exit')
     args = parser.parse_args()
+    if args.self_check:
+        from desktop.self_check import run
+        return run(args.self_check)
     # Each workflow the teacher selects gets its own controller from this factory.
     controller_factory = None
     if args.project_dir:
