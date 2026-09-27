@@ -25,7 +25,10 @@ def _check_tools(report):
     if missing:
         raise RuntimeError(f"not found: {', '.join(missing)}")
     if is_frozen():
-        outside = [name for name, path in found.items() if ROOT not in Path(path).resolve().parents]
+        # A macOS .app splits its files between Contents/Frameworks and
+        # Contents/Resources, so accept anything inside Contents.
+        bundle = ROOT.resolve().parent if sys.platform == "darwin" else ROOT.resolve()
+        outside = [name for name, path in found.items() if bundle not in Path(path).resolve().parents]
         if outside:
             raise RuntimeError(f"not taken from the app bundle: {', '.join(outside)}")
     report["tools"] = found
