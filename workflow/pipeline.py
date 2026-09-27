@@ -472,6 +472,8 @@ class Pipeline:
                         "validation_report": str(calibration_job / "validation_report.json"),
                         "reading_quality": parsed.get("reading_quality", {}),
                         "evidence": parsed.get("evidence", []),
+                        "question_number": parsed.get("question_number"),
+                        "scores": parsed.get("scores"),
                     })
                     self._advance(job_dir, checkpoint, State.GRADED)
                 if State(checkpoint["state"]) == State.GRADED:
@@ -518,8 +520,11 @@ class Pipeline:
         atomic_json(attempt_path, attempt)
         if writer_started is not None:
             writer_started()
+        bridge_path = self.jobs_dir / key / "real_grading_bridge.json"
+        bridge = read_json(bridge_path) if bridge_path.is_file() else {}
         try:
-            self.excel.ensure_draft(result, identity, key, digest, topic)
+            self.excel.ensure_draft(result, identity, key, digest, topic or bridge.get("question_number") or "",
+                                    teacher_scores=bridge.get("scores"))
             review_status = self.excel.get(key, identity).review_status
         except Exception as exc:
             attempt.update({
